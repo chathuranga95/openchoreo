@@ -133,7 +133,9 @@ func getMCPServerToolsets(h *Handler) *mcp.Toolsets {
 			string(mcp.ToolsetComponent) + "," +
 			string(mcp.ToolsetBuild) + "," +
 			string(mcp.ToolsetDeployment) + "," +
-			string(mcp.ToolsetInfrastructure)
+			string(mcp.ToolsetInfrastructure) + "," +
+			string(mcp.ToolsetSchema) + "," +
+			string(mcp.ToolsetResource)
 	}
 
 	// Parse toolsets
@@ -172,6 +174,12 @@ func getMCPServerToolsets(h *Handler) *mcp.Toolsets {
 		case mcp.ToolsetInfrastructure:
 			toolsets.InfrastructureToolset = handler
 			h.logger.Debug("Enabled MCP toolset", slog.String("toolset", "infrastructure"))
+		case mcp.ToolsetSchema:
+			toolsets.SchemaToolset = handler
+			h.logger.Debug("Enabled MCP toolset", slog.String("toolset", "schema"))
+		case mcp.ToolsetResource:
+			toolsets.ResourceToolset = handler
+			h.logger.Debug("Enabled MCP toolset", slog.String("toolset", "resource"))
 		default:
 			h.logger.Warn("Unknown toolset type", slog.String("toolset", string(toolsetType)))
 		}

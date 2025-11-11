@@ -6,6 +6,7 @@ package k8s
 import (
 	"fmt"
 
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -22,6 +23,9 @@ func NewK8sClient() (client.Client, error) {
 	scheme := runtime.NewScheme()
 	if err := openchoreov1alpha1.AddToScheme(scheme); err != nil {
 		return nil, fmt.Errorf("failed to add OpenChoreo scheme: %w", err)
+	}
+	if err := apiextensionsv1.AddToScheme(scheme); err != nil {
+		return nil, fmt.Errorf("failed to add apiextensions scheme: %w", err)
 	}
 
 	return client.New(config, client.Options{Scheme: scheme})

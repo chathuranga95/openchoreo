@@ -21,6 +21,8 @@ Tools are organized into **Toolsets** - logical groupings of related functionali
 - `ToolsetBuild` (`build`) - Build operations (trigger builds, list builds, build templates, build planes)
 - `ToolsetDeployment` (`deployment`) - Deployment operations (deployment pipelines, observer URLs)
 - `ToolsetInfrastructure` (`infrastructure`) - Infrastructure operations (environments, data planes)
+- `ToolsetSchema` (`schema`) - Schema operations (list available CRDs)
+- `ToolsetResource` (`resource`) - Custom resource related operations (apply, delete, get resources)
 
 ## Configuring Enabled Toolsets
 
@@ -35,7 +37,7 @@ Set the `MCP_TOOLSETS` environment variable to a comma-separated list of toolset
 export MCP_TOOLSETS="organization,project"
 
 # Enable all toolsets (default)
-export MCP_TOOLSETS="organization,project,component,build,deployment,infrastructure"
+export MCP_TOOLSETS="organization,project,component,build,deployment,infrastructure,schema,resource"
 
 # Enable specific toolsets for your use case
 export MCP_TOOLSETS="organization,project,component"
@@ -50,6 +52,8 @@ If `MCP_TOOLSETS` is not set, the system defaults to enabling all toolsets:
 - `build`
 - `deployment`
 - `infrastructure`
+- `schema`
+- `resource`
 
 ### Kubernetes/Helm Configuration
 
@@ -59,7 +63,7 @@ In production deployments, configure toolsets via Helm values:
 openchoreoApi:
   mcp:
     # Enable all toolsets (default)
-    toolsets: "organization,project,component,build,deployment,infrastructure"
+    toolsets: "organization,project,component,build,deployment,infrastructure,schema,resource"
     
     # Or enable specific toolsets based on your requirements
     # toolsets: "organization,project,component"

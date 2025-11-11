@@ -20,6 +20,7 @@ const (
 	testProjectName   = "my-project"
 	testComponentName = "my-component"
 	testEnvName       = "dev"
+	testKindProject   = "Project"
 )
 
 // MockCoreToolsetHandler implements CoreToolsetHandler for testing
@@ -180,6 +181,43 @@ func (m *MockCoreToolsetHandler) GetProjectDeploymentPipeline(
 	return `{"stages":[]}`, nil
 }
 
+func (m *MockCoreToolsetHandler) ListCRDs(ctx context.Context) (string, error) {
+	m.recordCall("ListCRDs")
+	return `{"crds":[{"kind":"Organization","group":"openchoreo.dev","version":"v1alpha1",` +
+		`"namespaced":false,"plural":"organizations","singular":"organization"}]}`, nil
+}
+
+func (m *MockCoreToolsetHandler) GetCRD(ctx context.Context, crdName string) (string, error) {
+	m.recordCall("GetCRD", crdName)
+	return `{"name":"components.openchoreo.dev","kind":"Component","group":"openchoreo.dev",` +
+		`"version":"v1alpha1","namespaced":true,"plural":"components","singular":"component",` +
+		`"schema":{"type":"object","properties":{"spec":{"type":"object"},"status":{"type":"object"}}}}`, nil
+}
+
+func (m *MockCoreToolsetHandler) ApplyResource(ctx context.Context, yaml string) (string, error) {
+	m.recordCall("ApplyResource", yaml)
+	return `{"apiVersion":"openchoreo.dev/v1alpha1","kind":"Project","name":"test-project",` +
+		`"namespace":"my-org","operation":"created"}`, nil
+}
+
+func (m *MockCoreToolsetHandler) GetResource(ctx context.Context, kind, name, namespace string) (string, error) {
+	m.recordCall("GetResource", kind, name, namespace)
+	return `{"apiVersion":"openchoreo.dev/v1alpha1","kind":"Project","name":"test-project",` +
+		`"namespace":"my-org","spec":{},"status":{}}`, nil
+}
+
+func (m *MockCoreToolsetHandler) DeleteResource(ctx context.Context, kind, name, namespace string) (string, error) {
+	m.recordCall("DeleteResource", kind, name, namespace)
+	return `{"apiVersion":"openchoreo.dev/v1alpha1","kind":"Project","name":"test-project",` +
+		`"namespace":"my-org","message":"Resource Project/test-project deleted successfully"}`, nil
+}
+
+func (m *MockCoreToolsetHandler) ListResources(ctx context.Context, kind, namespace string) (string, error) {
+	m.recordCall("ListResources", kind, namespace)
+	return `{"apiVersion":"openchoreo.dev/v1alpha1","kind":"Project","items":[{"name":"project1",` +
+		`"namespace":"my-org","createdAt":"2024-01-01T00:00:00Z"}],"totalCount":1}`, nil
+}
+
 func setupTestServer(t *testing.T) (*mcp.ClientSession, *MockCoreToolsetHandler) {
 	t.Helper()
 	mockHandler := NewMockCoreToolsetHandler()
@@ -190,6 +228,8 @@ func setupTestServer(t *testing.T) (*mcp.ClientSession, *MockCoreToolsetHandler)
 		BuildToolset:          mockHandler,
 		DeploymentToolset:     mockHandler,
 		InfrastructureToolset: mockHandler,
+		SchemaToolset:         mockHandler,
+		ResourceToolset:       mockHandler,
 	}
 	clientSession := setupTestServerWithToolset(t, toolsets)
 	return clientSession, mockHandler
@@ -605,6 +645,106 @@ var allToolSpecs = []toolTestSpec{
 		validateCall: func(t *testing.T, args []interface{}) {
 			if args[0] != testOrgName || args[1] != testProjectName {
 				t.Errorf("Expected (%s, %s), got (%v, %v)", testOrgName, testProjectName, args[0], args[1])
+			}
+		},
+	},
+	{
+		name:                "list_crds",
+		toolset:             "schema",
+		descriptionKeywords: []string{"CRD", "Custom Resource"},
+		descriptionMinLen:   10,
+		requiredParams:      []string{},
+		testArgs:            map[string]any{},
+		expectedMethod:      "ListCRDs",
+		validateCall: func(t *testing.T, args []interface{}) {
+			// No arguments expected
+		},
+	},
+	{
+		name:                "get_crd",
+		toolset:             "schema",
+		descriptionKeywords: []string{"CRD", "Custom Resource"},
+		descriptionMinLen:   10,
+		requiredParams:      []string{"crd_name"},
+		testArgs:            map[string]any{"crd_name": "components.openchoreo.dev"},
+		expectedMethod:      "GetCRD",
+		validateCall: func(t *testing.T, args []interface{}) {
+			if args[0] != "components.openchoreo.dev" {
+				t.Errorf("Expected crd_name 'components.openchoreo.dev', got %v", args[0])
+			}
+		},
+	},
+	{
+		name:                "apply_resource",
+		toolset:             "resource",
+		descriptionKeywords: []string{"apply", "resource"},
+		descriptionMinLen:   10,
+		requiredParams:      []string{"json"},
+		testArgs: map[string]any{
+			"json": `{"apiVersion":"openchoreo.dev/v1alpha1","kind":"Project",` +
+				`"metadata":{"name":"test-project","namespace":"my-org"},"spec":{"description":"Test project"}}`,
+		},
+		expectedMethod: "ApplyResource",
+		validateCall: func(t *testing.T, args []interface{}) {
+			jsonContent := args[0].(string)
+			if !strings.Contains(jsonContent, "Project") {
+				t.Errorf("Expected JSON to contain 'Project', got %v", jsonContent)
+			}
+		},
+	},
+	{
+		name:                "get_resource",
+		toolset:             "resource",
+		descriptionKeywords: []string{"get", "resource"},
+		descriptionMinLen:   10,
+		requiredParams:      []string{"kind", "name"},
+		optionalParams:      []string{"namespace"},
+		testArgs: map[string]any{
+			"kind":      testKindProject,
+			"name":      "test-project",
+			"namespace": testOrgName,
+		},
+		expectedMethod: "GetResource",
+		validateCall: func(t *testing.T, args []interface{}) {
+			if args[0] != testKindProject || args[1] != "test-project" || args[2] != testOrgName {
+				t.Errorf("Expected (Project, test-project, my-org), got (%v, %v, %v)", args[0], args[1], args[2])
+			}
+		},
+	},
+	{
+		name:                "delete_resource",
+		toolset:             "resource",
+		descriptionKeywords: []string{"delete", "resource"},
+		descriptionMinLen:   10,
+		requiredParams:      []string{"kind", "name"},
+		optionalParams:      []string{"namespace"},
+		testArgs: map[string]any{
+			"kind":      testKindProject,
+			"name":      "test-project",
+			"namespace": testOrgName,
+		},
+		expectedMethod: "DeleteResource",
+		validateCall: func(t *testing.T, args []interface{}) {
+			if args[0] != testKindProject || args[1] != "test-project" || args[2] != testOrgName {
+				t.Errorf("Expected (Project, test-project, my-org), got (%v, %v, %v)", args[0], args[1], args[2])
+			}
+		},
+	},
+	{
+		name:                "list_resources",
+		toolset:             "resource",
+		descriptionKeywords: []string{"list", "resource"},
+		descriptionMinLen:   10,
+		requiredParams:      []string{"kind"},
+		optionalParams:      []string{"namespace"},
+		testArgs: map[string]any{
+			"kind":      testKindProject,
+			"namespace": testOrgName,
+		},
+		expectedMethod: "ListResources",
+		validateCall: func(t *testing.T, args []interface{}) {
+			if args[0] != testKindProject || args[1] != testOrgName {
+				t.Errorf("Expected (Project, my-org), got (%v, %v)", args[0], args[1])
 			}
 		},
 	},

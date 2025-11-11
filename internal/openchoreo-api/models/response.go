@@ -266,3 +266,28 @@ type AddonResponse struct {
 	Description string    `json:"description,omitempty"`
 	CreatedAt   time.Time `json:"createdAt"`
 }
+
+// CRDInfo represents information about a Custom Resource Definition
+type CRDInfo struct {
+	Kind       string `json:"kind"`
+	Group      string `json:"group"`
+	Version    string `json:"version"`
+	Namespaced bool   `json:"namespaced"`
+	Plural     string `json:"plural"`
+	Singular   string `json:"singular"`
+}
+
+// CRDDetails represents detailed information about a CRD including its schema
+type CRDDetails struct {
+	Name        string                 `json:"name"`
+	Kind        string                 `json:"kind"`
+	Group       string                 `json:"group"`
+	Version     string                 `json:"version"`
+	Namespaced  bool                   `json:"namespaced"`
+	Plural      string                 `json:"plural"`
+	Singular    string                 `json:"singular"`
+	ShortNames  []string               `json:"shortNames,omitempty"`
+	Categories  []string               `json:"categories,omitempty"`
+	Schema      map[string]interface{} `json:"schema,omitempty"`
+	Description string                 `json:"description,omitempty"`
+}
