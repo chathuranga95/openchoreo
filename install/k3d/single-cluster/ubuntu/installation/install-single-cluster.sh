@@ -17,15 +17,17 @@ RESET='\033[0m'
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../../.." && pwd)"
-SINGLE_CLUSTER_DIR="${SCRIPT_DIR}/../.."
+SINGLE_CLUSTER_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # Configuration
 CLUSTER_NAME="openchoreo"
 KUBE_CONTEXT="k3d-${CLUSTER_NAME}"
-INSTALL_BUILD_PLANE="${INSTALL_BUILD_PLANE:-true}"
-INSTALL_OBSERVABILITY="${INSTALL_OBSERVABILITY:-true}"
-SKIP_PREREQUISITES="${SKIP_PREREQUISITES:-false}"
+RECREATE_CLUSTER="${RECREATE_CLUSTER:-false}"
+INSTALL_BUILD_PLANE="${INSTALL_BUILD_PLANE:-false}"
+INSTALL_OBSERVABILITY="${INSTALL_OBSERVABILITY:-false}"
+SKIP_PREREQUISITES="${SKIP_PREREQUISITES:-true}"
 PRELOAD_IMAGES="${PRELOAD_IMAGES:-false}"
+USE_UBUNTU_DOCKER="${USE_UBUNTU_DOCKER:-true}"  # Use Ubuntu's docker.io by default
 
 # Version requirements
 MIN_DOCKER_VERSION="20.10"
@@ -64,6 +66,24 @@ version_ge() {
     [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" = "$2" ]
 }
 
+check_install_jq() {
+    log_step "Checking jq installation..."
+
+    if command_exists jq; then
+        JQ_VERSION=$(jq --version 2>/dev/null)
+        log_success "jq is already installed ($JQ_VERSION)"
+    else
+        log_warning "jq not found. Installing jq..."
+        sudo apt-get update
+        if sudo apt-get install -y jq; then
+            log_success "jq installed successfully"
+        else
+            log_error "Failed to install jq. Please install jq manually."
+            exit 1
+        fi
+    fi
+}
+
 # Check and install Docker
 check_install_docker() {
     log_step "Checking Docker installation..."
@@ -87,7 +107,12 @@ check_install_docker() {
             sleep 5
         fi
         
-        # Check if current user is in docker group
+        # Ensure docker group exists and user is in it
+        if ! getent group docker >/dev/null; then
+            log_info "Creating docker group..."
+            sudo groupadd docker
+        fi
+        
         if ! groups | grep -q docker; then
             log_warning "Current user is not in docker group"
             log_info "Adding current user to docker group..."
@@ -100,33 +125,85 @@ check_install_docker() {
     else
         log_warning "Docker not found. Installing Docker..."
         
-        # Install Docker on Ubuntu
         sudo apt-get update
-        sudo apt-get install -y \
-            ca-certificates \
-            curl \
-            gnupg \
-            lsb-release
         
-        # Add Docker's official GPG key
-        sudo install -m 0755 -d /etc/apt/keyrings
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-        sudo chmod a+r /etc/apt/keyrings/docker.gpg
+        # Try Ubuntu repository first if enabled (simpler, no SSL issues)
+        if [[ "$USE_UBUNTU_DOCKER" == "true" ]]; then
+            log_info "Installing Docker from Ubuntu repository (docker.io)..."
+            
+            if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io docker-compose; then
+                log_success "Docker installed from Ubuntu repository"
+                
+                # Ensure docker group exists
+                if ! getent group docker >/dev/null; then
+                    log_info "Creating docker group..."
+                    sudo groupadd docker
+                fi
+                
+                # Add current user to docker group
+                log_info "Adding current user to docker group..."
+                sudo usermod -aG docker "$USER"
+                
+                # Start and enable Docker
+                log_info "Starting Docker service..."
+                sudo systemctl start docker
+                sudo systemctl enable docker
+                
+                log_success "Docker installed successfully"
+                log_warning "You need to log out and log back in for group changes to take effect"
+                log_warning "Or run: newgrp docker"
+                return 0
+            else
+                log_warning "Failed to install from Ubuntu repository, trying official Docker repository..."
+            fi
+        fi
         
-        # Set up Docker repository
-        echo \
-          "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-          $(lsb_release -cs) stable" | \
-          sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+        # Install from official Docker repository
+        log_info "Installing Docker from official Docker repository..."
+            
+            # Install prerequisites
+            sudo apt-get install -y \
+                ca-certificates \
+                curl \
+                gnupg \
+                lsb-release
+            
+            # Update CA certificates
+            sudo update-ca-certificates --fresh
+            
+            # Add Docker's official GPG key
+            sudo install -m 0755 -d /etc/apt/keyrings
+            
+            if curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg 2>/dev/null; then
+                sudo chmod a+r /etc/apt/keyrings/docker.gpg
+            else
+                log_error "Failed to download Docker GPG key. Please check your internet connection and SSL certificates."
+                log_info "You can try manually installing Docker with: sudo apt install docker.io"
+                return 1
+            fi
+            
+            # Set up Docker repository
+            echo \
+              "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+              $(lsb_release -cs) stable" | \
+              sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+            
+            # Install Docker Engine
+            sudo apt-get update
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
         
-        # Install Docker Engine
-        sudo apt-get update
-        sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+        # Ensure docker group exists
+        if ! getent group docker >/dev/null; then
+            log_info "Creating docker group..."
+            sudo groupadd docker
+        fi
         
         # Add current user to docker group
+        log_info "Adding current user to docker group..."
         sudo usermod -aG docker "$USER"
         
         # Start and enable Docker
+        log_info "Starting Docker service..."
         sudo systemctl start docker
         sudo systemctl enable docker
         
@@ -215,13 +292,13 @@ create_cluster() {
     # Check if cluster already exists
     if k3d cluster list 2>/dev/null | grep -q "^${CLUSTER_NAME}"; then
         log_warning "Cluster '${CLUSTER_NAME}' already exists"
-        read -p "Do you want to delete and recreate it? (y/N): " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            log_info "Deleting existing cluster..."
+        
+        # Check RECREATE_CLUSTER environment variable
+        if [[ "${RECREATE_CLUSTER:-false}" =~ ^(true|yes|y|1)$ ]]; then
+            log_info "RECREATE_CLUSTER is set. Deleting existing cluster..."
             k3d cluster delete "${CLUSTER_NAME}"
         else
-            log_info "Using existing cluster"
+            log_info "Using existing cluster (set RECREATE_CLUSTER=true to recreate)"
             return 0
         fi
     fi
@@ -262,7 +339,7 @@ preload_images() {
     local args=(
         "--cluster" "${CLUSTER_NAME}"
         "--local-charts"
-        "--control-plane" "--cp-values" "${SINGLE_CLUSTER_DIR}/values-cp.yaml"
+        "--control-plane" "--cp-values" "${SCRIPT_DIR}/values-cp.yaml"
         "--data-plane" "--dp-values" "${SINGLE_CLUSTER_DIR}/values-dp.yaml"
         "--parallel" "4"
     )
@@ -313,21 +390,155 @@ install_helm_chart() {
     fi
 }
 
+patch_openchoreo_host() {
+    log_info "Patching ingresses to use upstream instead of localhost domains..."
+    
+    # Patch OpenChoreo API ingress
+    kubectl --context="${KUBE_CONTEXT}" patch ingress -n openchoreo-control-plane \
+        openchoreo-api --type=json \
+        -p='[{"op": "replace", "path": "/spec/rules/0/host", "value": "api.openchoreo.upstream"}]' \
+        2>/dev/null || log_warning "Failed to patch openchoreo-api ingress"
+    
+    # Patch Backstage ingress
+    kubectl --context="${KUBE_CONTEXT}" patch ingress -n openchoreo-control-plane \
+        openchoreo-ui --type=json \
+        -p='[{"op": "replace", "path": "/spec/rules/0/host", "value": "openchoreo.upstream"}]' \
+        2>/dev/null || log_warning "Failed to patch backstage ingress"
+    
+    # Patch Asgardeo Thunder ingress
+    kubectl --context="${KUBE_CONTEXT}" patch ingress -n openchoreo-control-plane \
+        openchoreo-asgardeo-thunder --type=json \
+        -p='[{"op": "replace", "path": "/spec/rules/0/host", "value": "thunder.openchoreo.upstream"}]' \
+        2>/dev/null || log_warning "Failed to patch asgardeo-thunder ingress"
+
+
+    log_info "Patching Backstage deployment environment variables to use upstream instead of localhost domains..."
+    
+    # Find the BACKSTAGE_BASE_URL environment variable index
+    BACKSTAGE_BASE_URL_INDEX=$(kubectl --context="${KUBE_CONTEXT}" get deployment -n openchoreo-control-plane \
+        openchoreo-ui -o json | \
+        jq '.spec.template.spec.containers[0].env | map(.name) | index("BACKSTAGE_BASE_URL")' 2>/dev/null)
+    
+    if [[ -n "$BACKSTAGE_BASE_URL_INDEX" && "$BACKSTAGE_BASE_URL_INDEX" != "null" ]]; then
+        kubectl --context="${KUBE_CONTEXT}" patch deployment -n openchoreo-control-plane \
+            openchoreo-ui --type=json \
+            -p="[{\"op\": \"replace\", \"path\": \"/spec/template/spec/containers/0/env/${BACKSTAGE_BASE_URL_INDEX}/value\", \"value\": \"http://openchoreo.upstream:8080\"}]" \
+            2>/dev/null || log_warning "Failed to patch BACKSTAGE_BASE_URL environment variable"
+    else
+        log_warning "BACKSTAGE_BASE_URL environment variable not found"
+    fi
+    
+    # Find the OPENCHOREO_AUTH_AUTHORIZATION_URL environment variable index
+    AUTH_URL_INDEX=$(kubectl --context="${KUBE_CONTEXT}" get deployment -n openchoreo-control-plane \
+        openchoreo-ui -o json | \
+        jq '.spec.template.spec.containers[0].env | map(.name) | index("OPENCHOREO_AUTH_AUTHORIZATION_URL")' 2>/dev/null)
+    
+    if [[ -n "$AUTH_URL_INDEX" && "$AUTH_URL_INDEX" != "null" ]]; then
+        kubectl --context="${KUBE_CONTEXT}" patch deployment -n openchoreo-control-plane \
+            openchoreo-ui --type=json \
+            -p="[{\"op\": \"replace\", \"path\": \"/spec/template/spec/containers/0/env/${AUTH_URL_INDEX}/value\", \"value\": \"http://thunder.openchoreo.upstream:8080/oauth2/authorize\"}]" \
+            2>/dev/null || log_warning "Failed to patch OPENCHOREO_AUTH_AUTHORIZATION_URL environment variable"
+    else
+        log_warning "OPENCHOREO_AUTH_AUTHORIZATION_URL environment variable not found"
+    fi
+    
+    log_info "Waiting for Backstage deployment to rollout after patching..."
+    kubectl --context="${KUBE_CONTEXT}" rollout status deployment/openchoreo-ui -n openchoreo-control-plane --timeout=300s \
+        2>/dev/null || log_warning "Backstage rollout may still be in progress"
+}
+
+create_ingress_middleware() {
+    log_step "Creating ingress middleware..."
+    
+    # Create the namespace if it does not exist
+    kubectl --context="${KUBE_CONTEXT}" get namespace openchoreo-control-plane >/dev/null 2>&1 || \
+        kubectl --context="${KUBE_CONTEXT}" create namespace openchoreo-control-plane
+
+    kubectl --context="${KUBE_CONTEXT}" apply -f "${SCRIPT_DIR}/ingress-middleware.yaml"
+    
+    log_success "Ingress middleware created successfully"
+}
+
+annotate_ingress_with_middleware() {
+    log_step "Annotating ingress with middleware..."
+    
+    kubectl annotate ingress openchoreo-ui -n openchoreo-control-plane \
+    traefik.ingress.kubernetes.io/router.middlewares=openchoreo-control-plane-strip-hsts@kubernetescrd \
+    --overwrite
+
+    kubectl annotate ingress openchoreo-asgardeo-thunder -n openchoreo-control-plane \
+    traefik.ingress.kubernetes.io/router.middlewares=openchoreo-control-plane-strip-hsts@kubernetescrd \
+    --overwrite
+    
+    log_success "Ingresses annotated with middleware successfully"
+}
+
+update_backstage_application() {
+    echo "Updating Backstage application configuration..."
+    
+    # Get all applications
+    local apps_response=$(curl -s http://localhost:8080/applications -H 'Host: thunder.openchoreo.upstream')
+    
+    # Extract Backstage application ID
+    local backstage_id=$(echo "$apps_response" | jq -r '.applications[] | select(.name=="Backstage") | .id')
+    
+    if [ -z "$backstage_id" ]; then
+        echo "Error: Backstage application not found"
+        return 1
+    fi
+    
+    echo "Found Backstage application with ID: $backstage_id"
+    
+    # Get full application details
+    local app_details=$(curl -s "http://localhost:8080/applications/$backstage_id" -H 'Host: thunder.openchoreo.upstream')
+    
+    # Update the application with patches
+    local updated_app=$(echo "$app_details" | jq '.inbound_auth_config[0].config.redirect_uris = ["http://openchoreo.upstream:8080/api/auth/default-idp/handler/frame", "http://localhost:7007/api/auth/default-idp/handler/frame"] | .inbound_auth_config[0].config.client_secret = "backstage-portal-secret"')
+    
+    # Send PUT request to update the application
+    curl -X PUT "http://localhost:8080/applications/$backstage_id" \
+        -H 'Host: thunder.openchoreo.upstream' \
+        -H 'Content-Type: application/json' \
+        -d "$updated_app"
+    
+    echo "Backstage application updated successfully"
+}
+
+update_thunder_cm() {
+    log_info "Updating openchoreo-asgardeo-thunder-config ConfigMap..."
+    
+    # Get the ConfigMap, replace all occurrences, and apply back
+    kubectl --context="${KUBE_CONTEXT}" get configmap -n openchoreo-control-plane \
+        openchoreo-asgardeo-thunder-config -o yaml | \
+        sed 's/thunder\.openchoreo\.localhost/thunder.openchoreo.upstream/g' | \
+        kubectl --context="${KUBE_CONTEXT}" apply -f -
+    
+    log_info "Thunder ConfigMap updated successfully"
+}
+
 # Install Control Plane
 install_control_plane() {
+    log_step "Creating ingress middleware"
+    create_ingress_middleware
+
     log_step "Installing OpenChoreo Control Plane..."
     
     install_helm_chart \
         "openchoreo-control-plane" \
         "${REPO_ROOT}/install/helm/openchoreo-control-plane" \
         "openchoreo-control-plane" \
-        "${SINGLE_CLUSTER_DIR}/values-cp.yaml"
+        "${SCRIPT_DIR}/values-cp.yaml"
     
     log_info "Waiting for Control Plane pods to be ready..."
     kubectl --context="${KUBE_CONTEXT}" wait --for=condition=Ready pods \
         -n openchoreo-control-plane \
         -l app.kubernetes.io/name=openchoreo-control-plane \
         --timeout=600s || log_warning "Some Control Plane pods may not be ready yet"
+    
+    # patch_openchoreo_host
+    # annotate_ingress_with_middleware
+    # update_backstage_application
+    # update_thunder_cm
 }
 
 # Install Data Plane
@@ -525,9 +736,9 @@ print_access_info() {
     echo -e "${CYAN}${BOLD}Access Information:${RESET}\n"
     
     echo -e "${BOLD}Control Plane:${RESET}"
-    echo -e "  - OpenChoreo UI:      ${BLUE}http://openchoreo.localhost:8080${RESET}"
-    echo -e "  - OpenChoreo API:     ${BLUE}http://api.openchoreo.localhost:8080${RESET}"
-    echo -e "  - Asgardeo Thunder:   ${BLUE}http://thunder.openchoreo.localhost:8080${RESET}"
+    echo -e "  - OpenChoreo UI:      ${BLUE}http://hostedopenchoreo.localhost:8080${RESET}"
+    echo -e "  - OpenChoreo API:     ${BLUE}http://api.hostedopenchoreo.localhost:8080${RESET}"
+    echo -e "  - Asgardeo Thunder:   ${BLUE}http://thunder.hostedopenchoreo.localhost:8080${RESET}"
     
     echo -e "\n${BOLD}Data Plane:${RESET}"
     echo -e "  - User Workloads:     ${BLUE}http://localhost:9080${RESET} (Envoy Gateway)"
@@ -587,6 +798,7 @@ Environment Variables:
   INSTALL_OBSERVABILITY=true    Install Observability Plane
   SKIP_PREREQUISITES=true       Skip prerequisite checks
   PRELOAD_IMAGES=true          Preload images before installation
+  USE_UBUNTU_DOCKER=true       Use Ubuntu's docker.io package (default)
 
 Examples:
   # Full installation with all planes
@@ -663,10 +875,12 @@ EOF
     log_info "  Install Observability: ${INSTALL_OBSERVABILITY}"
     log_info "  Skip Prerequisites: ${SKIP_PREREQUISITES}"
     log_info "  Preload Images: ${PRELOAD_IMAGES}"
+    log_info "  Use Ubuntu Docker: ${USE_UBUNTU_DOCKER}"
     echo ""
     
     # Check prerequisites
     if [[ "$SKIP_PREREQUISITES" != "true" ]]; then
+        check_install_jq
         check_install_docker
         check_install_k3d
         check_install_kubectl
@@ -714,4 +928,3 @@ EOF
 
 # Run main function
 main "$@"
-

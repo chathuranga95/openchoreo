@@ -1,0 +1,10 @@
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: strip-hsts
+  namespace: openchoreo-control-plane
+spec:
+  headers:
+    customResponseHeaders:
+      Content-Security-Policy: "default-src 'self';base-uri 'self';font-src 'self' https: data:;frame-ancestors 'self';img-src 'self' data:;object-src 'none';script-src 'self' 'unsafe-eval' 'unsafe-inline';script-src-attr 'none';style-src 'self' https: 'unsafe-inline';connect-src 'self' http: https:"
+      Strict-Transport-Security: ""
