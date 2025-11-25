@@ -1,0 +1,38 @@
+# Custom values for Keel installation with UI dashboard enabled
+
+# Enable the Keel service to access the UI dashboard
+service:
+  enabled: true
+  type: ClusterIP
+  externalPort: 9300
+
+# Enable polling for automatic updates
+polling:
+  enabled: true
+  defaultSchedule: "@every 10m"
+
+# Helm provider configuration
+helmProvider:
+  enabled: true
+  version: "v3"
+
+# Enable debug logging for better visibility
+debug: false
+
+# Notification level
+notificationLevel: info
+
+# Basic auth on approvals - Required to enable the UI dashboard
+basicauth:
+  enabled: true
+  user: "admin"
+  password: "admin"
+
+# Resource limits
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
