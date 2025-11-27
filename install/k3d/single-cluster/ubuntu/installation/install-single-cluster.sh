@@ -23,8 +23,8 @@ SINGLE_CLUSTER_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 CLUSTER_NAME="openchoreo"
 KUBE_CONTEXT="k3d-${CLUSTER_NAME}"
 RECREATE_CLUSTER="${RECREATE_CLUSTER:-false}"
-INSTALL_BUILD_PLANE="${INSTALL_BUILD_PLANE:-false}"
-INSTALL_OBSERVABILITY="${INSTALL_OBSERVABILITY:-false}"
+INSTALL_BUILD_PLANE="${INSTALL_BUILD_PLANE:-true}"
+INSTALL_OBSERVABILITY="${INSTALL_OBSERVABILITY:-true}"
 SKIP_PREREQUISITES="${SKIP_PREREQUISITES:-true}"
 PRELOAD_IMAGES="${PRELOAD_IMAGES:-false}"
 USE_UBUNTU_DOCKER="${USE_UBUNTU_DOCKER:-true}"  # Use Ubuntu's docker.io by default
@@ -590,6 +590,14 @@ install_observability_plane() {
         -n openchoreo-observability-plane \
         -l app.kubernetes.io/component=observer \
         --timeout=600s || log_warning "Some Observability Plane pods may not be ready yet"
+    
+    log_step "Configuring Dataplane and Buildplane with the Observability plane"
+
+    # Configure DataPlane to use observer service
+    kubectl patch dataplane default -n default --type merge -p '{"spec":{"observer":{"url":"http://observer.openchoreo-observability-plane:8080","authentication":{"basicAuth":{"username":"dummy","password":"dummy"}}}}}'
+
+    # Configure BuildPlane to use observer service
+    kubectl patch buildplane default -n default --type merge -p '{"spec":{"observer":{"url":"http://observer.openchoreo-observability-plane:8080","authentication":{"basicAuth":{"username":"dummy","password":"dummy"}}}}}'
 }
 
 # Install Keel
