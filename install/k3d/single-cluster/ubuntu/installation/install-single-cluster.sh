@@ -510,8 +510,11 @@ install_observability_plane() {
         -l app.kubernetes.io/component=observer \
         --timeout=600s || log_warning "Some Observability Plane pods may not be ready yet"
     
-    log_step "Configuring Dataplane and Buildplane with the Observability plane"
+    configure_dp_bp_with_op
+}
 
+configure_dp_bp_with_op() {
+    log_step "Configuring Dataplane and Buildplane with the Observability plane"
     # Configure DataPlane to use observer service
     kubectl patch dataplane default -n default --type merge -p '{"spec":{"observer":{"url":"http://observer.openchoreo-observability-plane:8080","authentication":{"basicAuth":{"username":"dummy","password":"dummy"}}}}}'
 
@@ -836,9 +839,11 @@ EOF
     # Install components
     install_control_plane
     install_data_plane
+    create_dataplane_resource
     
     if [[ "$INSTALL_BUILD_PLANE" == "true" ]]; then
         install_build_plane
+        create_buildplane_resource
     fi
     
     if [[ "$INSTALL_OBSERVABILITY" == "true" ]]; then
@@ -847,13 +852,6 @@ EOF
 
     # Install Keel for automatic deployment updates
     install_keel
-
-    # Create resources
-    create_dataplane_resource
-    
-    if [[ "$INSTALL_BUILD_PLANE" == "true" ]]; then
-        create_buildplane_resource
-    fi
     
     # Verify installation
     verify_installation

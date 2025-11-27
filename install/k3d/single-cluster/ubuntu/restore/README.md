@@ -40,23 +40,23 @@ cd ../installation
 
 # Step 4: Restore your data
 cd ../restore
-./restore-data-only.sh --backup-dir ../backup/backups/backup-2024-11-25-143000
+./restore-data.sh --backup-dir ../backup/backups/backup-2024-11-25-143000
 ```
 
 ### Options
 
 ```bash
 # Basic restore (restores everything)
-./restore-data-only.sh --backup-dir /path/to/backup
+./restore-data.sh --backup-dir /path/to/backup
 
 # Restore without volumes (faster, configs only, no logs/metrics)
-./restore-data-only.sh --backup-dir /path/to/backup --skip-volumes
+./restore-data.sh --backup-dir /path/to/backup --skip-volumes
 
 # Preview what will be restored (doesn't actually restore)
-./restore-data-only.sh --backup-dir /path/to/backup --dry-run
+./restore-data.sh --backup-dir /path/to/backup --dry-run
 
 # Force restore without confirmation (for automation)
-./restore-data-only.sh --backup-dir /path/to/backup --force
+./restore-data.sh --backup-dir /path/to/backup --force
 ```
 
 ## Verify Restoration

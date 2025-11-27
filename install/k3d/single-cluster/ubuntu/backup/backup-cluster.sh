@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 
 # OpenChoreo Cluster Backup Script
-# Backs up all planes (CP, DP, BP, OP) including persistent volumes
+# Backs up OpenChoreo resources, observability data, persistent volumes, and secrets
+# Note: CRDs are NOT backed up as they are installed during cluster setup
 
 set -eo pipefail
 
@@ -16,12 +17,13 @@ RESET='\033[0m'
 
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../../.." && pwd)"
 
 # Configuration
 CLUSTER_NAME="${CLUSTER_NAME:-openchoreo}"
 KUBE_CONTEXT="k3d-${CLUSTER_NAME}"
 BACKUP_TIMESTAMP=$(date +%Y-%m-%d-%H%M%S)
-OUTPUT_DIR="${OUTPUT_DIR:-${SCRIPT_DIR}/backups/backup-${BACKUP_TIMESTAMP}}"
+OUTPUT_DIR="${OUTPUT_DIR:-$(dirname "${REPO_ROOT}")/backups/backup-${BACKUP_TIMESTAMP}}"
 COMPRESS="${COMPRESS:-false}"
 SKIP_VOLUMES="${SKIP_VOLUMES:-false}"
 SKIP_SECRETS="${SKIP_SECRETS:-false}"
@@ -69,13 +71,17 @@ validate_prerequisites() {
     log_step "Validating prerequisites..."
     
     local missing_tools=()
-    
+
     if ! command_exists kubectl; then
         missing_tools+=("kubectl")
     fi
-    
+
     if ! command_exists helm; then
         missing_tools+=("helm")
+    fi
+
+    if ! command_exists jq; then
+        missing_tools+=("jq")
     fi
     
     if [ ${#missing_tools[@]} -gt 0 ]; then
@@ -97,10 +103,10 @@ validate_prerequisites() {
 # Create backup directory structure
 create_backup_structure() {
     log_step "Creating backup directory structure..."
-    
-    mkdir -p "${OUTPUT_DIR}"/{control-plane,data-plane,build-plane,observability-plane,cluster-info}
+
+    mkdir -p "${OUTPUT_DIR}"/{control-plane,data-plane,build-plane,observability-plane,user-workloads}
     mkdir -p "${OUTPUT_DIR}"/{control-plane/secrets,build-plane/volumes,observability-plane/volumes}
-    
+
     log_success "Backup directory created: ${OUTPUT_DIR}"
 }
 
@@ -130,38 +136,6 @@ EOF
     log_success "Metadata saved"
 }
 
-# Backup cluster information
-backup_cluster_info() {
-    log_step "Backing up cluster information..."
-    
-    local cluster_dir="${OUTPUT_DIR}/cluster-info"
-    
-    # Cluster info
-    kubectl --context="${KUBE_CONTEXT}" cluster-info dump > "${cluster_dir}/cluster-info.yaml" 2>/dev/null || true
-    
-    # Node information
-    kubectl --context="${KUBE_CONTEXT}" get nodes -o yaml > "${cluster_dir}/nodes.yaml"
-    
-    # Version information
-    kubectl --context="${KUBE_CONTEXT}" version -o yaml > "${cluster_dir}/version-info.yaml" 2>/dev/null || true
-    
-    # Namespaces
-    kubectl --context="${KUBE_CONTEXT}" get namespaces -o yaml > "${cluster_dir}/namespaces.yaml"
-    
-    log_success "Cluster information backed up"
-}
-
-# Backup CRDs
-backup_crds() {
-    log_step "Backing up Custom Resource Definitions..."
-    
-    local crds_file="${OUTPUT_DIR}/control-plane/crds.yaml"
-    
-    kubectl --context="${KUBE_CONTEXT}" get crds -o yaml > "${crds_file}"
-    
-    log_success "CRDs backed up"
-}
-
 # Backup Control Plane
 backup_control_plane() {
     if [ "$BACKUP_CP" != "true" ]; then
@@ -178,25 +152,18 @@ backup_control_plane() {
         log_warning "Control Plane namespace '${CP_NAMESPACE}' not found, skipping"
         return 0
     fi
-    
-    # Backup all resources
-    kubectl --context="${KUBE_CONTEXT}" get all,configmaps,secrets,ingress,serviceaccounts,roles,rolebindings \
-        -n "${CP_NAMESPACE}" -o yaml > "${cp_dir}/resources.yaml" 2>/dev/null || true
-    
-    # Backup OpenChoreo CRDs resources
-    log_info "Backing up OpenChoreo custom resources..."
-    kubectl --context="${KUBE_CONTEXT}" get projects,organizations,environments \
+
+    # Backup OpenChoreo custom resources (user-created)
+    log_info "Backing up OpenChoreo custom resources (components, projects, organizations, environments)..."
+    kubectl --context="${KUBE_CONTEXT}" get components,projects,organizations,environments \
         -A -o yaml > "${cp_dir}/openchoreo-resources.yaml" 2>/dev/null || true
-    
-    # Backup Helm releases
-    helm --kube-context="${KUBE_CONTEXT}" list -n "${CP_NAMESPACE}" -o yaml > "${cp_dir}/helm-releases.yaml" 2>/dev/null || true
-    
-    # Backup persistent volume claims
-    kubectl --context="${KUBE_CONTEXT}" get pvc -n "${CP_NAMESPACE}" -o yaml > "${cp_dir}/pvcs.yaml" 2>/dev/null || true
-    
-    # Backup secrets separately (if not skipped)
+
+    # Backup user secrets only (exclude helm-managed secrets)
     if [ "$SKIP_SECRETS" != "true" ]; then
-        kubectl --context="${KUBE_CONTEXT}" get secrets -n "${CP_NAMESPACE}" -o yaml > "${cp_dir}/secrets/secrets.yaml" 2>/dev/null || true
+        log_info "Backing up user secrets..."
+        kubectl --context="${KUBE_CONTEXT}" get secrets -n "${CP_NAMESPACE}" \
+            -o json | jq '.items | map(select(.metadata.labels."app.kubernetes.io/managed-by" != "Helm"))' | \
+            kubectl --context="${KUBE_CONTEXT}" create -f - --dry-run=client -o yaml > "${cp_dir}/secrets/secrets.yaml" 2>/dev/null || true
     fi
     
     log_success "Control Plane backed up"
@@ -218,25 +185,22 @@ backup_data_plane() {
         log_warning "Data Plane namespace '${DP_NAMESPACE}' not found, skipping"
         return 0
     fi
-    
-    # Backup all resources
-    kubectl --context="${KUBE_CONTEXT}" get all,configmaps,secrets,serviceaccounts,roles,rolebindings \
-        -n "${DP_NAMESPACE}" -o yaml > "${dp_dir}/resources.yaml" 2>/dev/null || true
-    
-    # Backup Gateway resources
-    log_info "Backing up Gateway configurations..."
-    kubectl --context="${KUBE_CONTEXT}" get gateways,httproutes,grpcroutes,tcproutes \
-        -A -o yaml > "${dp_dir}/gateway-config.yaml" 2>/dev/null || true
-    
-    # Backup DataPlane resources
+
+    # Backup user routes (created when users deploy workloads)
+    log_info "Backing up user routes (HTTP/GRPC/TCP)..."
+    kubectl --context="${KUBE_CONTEXT}" get httproutes,grpcroutes,tcproutes \
+        -A -o yaml > "${dp_dir}/routes.yaml" 2>/dev/null || true
+
+    # Backup DataPlane resources (user-created)
+    log_info "Backing up DataPlane resources..."
     kubectl --context="${KUBE_CONTEXT}" get dataplanes -A -o yaml > "${dp_dir}/dataplane-resources.yaml" 2>/dev/null || true
-    
-    # Backup Helm releases
-    helm --kube-context="${KUBE_CONTEXT}" list -n "${DP_NAMESPACE}" -o yaml > "${dp_dir}/helm-releases.yaml" 2>/dev/null || true
-    
-    # Backup certificates
-    kubectl --context="${KUBE_CONTEXT}" get certificates,certificaterequests \
-        -n "${DP_NAMESPACE}" -o yaml > "${dp_dir}/certificates.yaml" 2>/dev/null || true
+
+    # Backup component workload namespaces (user namespaces)
+    log_info "Backing up component workload namespaces..."
+    local system_namespaces="kube-system|kube-public|kube-node-lease|default|${CP_NAMESPACE}|${DP_NAMESPACE}|${BP_NAMESPACE}|${OP_NAMESPACE}"
+    kubectl --context="${KUBE_CONTEXT}" get namespaces -o json | \
+        jq --arg sys_ns "$system_namespaces" '.items | map(select(.metadata.name | test($sys_ns) | not))' | \
+        kubectl --context="${KUBE_CONTEXT}" create -f - --dry-run=client -o yaml > "${dp_dir}/namespaces.yaml" 2>/dev/null || true
     
     log_success "Data Plane backed up"
 }
@@ -257,21 +221,15 @@ backup_build_plane() {
         log_warning "Build Plane namespace '${BP_NAMESPACE}' not found, skipping"
         return 0
     fi
-    
-    # Backup all resources
-    kubectl --context="${KUBE_CONTEXT}" get all,configmaps,secrets,serviceaccounts,roles,rolebindings \
-        -n "${BP_NAMESPACE}" -o yaml > "${bp_dir}/resources.yaml" 2>/dev/null || true
-    
-    # Backup Argo Workflows
-    log_info "Backing up Argo Workflows..."
-    kubectl --context="${KUBE_CONTEXT}" get workflows,workflowtemplates,cronworkflows,clusterworkflowtemplates \
+
+    # Backup user-created Argo Workflows only
+    log_info "Backing up user Workflows..."
+    kubectl --context="${KUBE_CONTEXT}" get workflows,workflowtemplates,cronworkflows \
         -n "${BP_NAMESPACE}" -o yaml > "${bp_dir}/workflows.yaml" 2>/dev/null || true
-    
-    # Backup BuildPlane resources
+
+    # Backup BuildPlane resources (user-created)
+    log_info "Backing up BuildPlane resources..."
     kubectl --context="${KUBE_CONTEXT}" get buildplanes -A -o yaml > "${bp_dir}/buildplane-resources.yaml" 2>/dev/null || true
-    
-    # Backup Helm releases
-    helm --kube-context="${KUBE_CONTEXT}" list -n "${BP_NAMESPACE}" -o yaml > "${bp_dir}/helm-releases.yaml" 2>/dev/null || true
     
     # Backup persistent volumes
     if [ "$SKIP_VOLUMES" != "true" ]; then
@@ -284,28 +242,30 @@ backup_build_plane() {
 # Backup Build Plane persistent volumes
 backup_build_plane_volumes() {
     log_info "Backing up Build Plane persistent volumes..."
-    
+
     local bp_volumes_dir="${OUTPUT_DIR}/build-plane/volumes"
-    
-    # Get registry PVCs
+
+    # Get registry PVCs (container images)
     local registry_pvcs=$(kubectl --context="${KUBE_CONTEXT}" get pvc -n "${BP_NAMESPACE}" \
-        -l app.kubernetes.io/name=docker-registry -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
-    
+        -l app=registry -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
+
     if [ -n "$registry_pvcs" ]; then
         log_info "Backing up container registry data..."
         for pvc in $registry_pvcs; do
-            backup_pvc_data "${BP_NAMESPACE}" "$pvc" "${bp_volumes_dir}/registry-${pvc}.tar.gz"
+            backup_pvc_data "${BP_NAMESPACE}" "$pvc" "${bp_volumes_dir}/${pvc}.tar.gz"
         done
+    else
+        log_warning "No container registry PVCs found"
     fi
-    
-    # Get Argo archive PVCs
+
+    # Get Argo archive PVCs (workflow logs/artifacts)
     local argo_pvcs=$(kubectl --context="${KUBE_CONTEXT}" get pvc -n "${BP_NAMESPACE}" \
-        -l app.kubernetes.io/name=argo -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
-    
+        -l app.kubernetes.io/name=argo-workflows -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
+
     if [ -n "$argo_pvcs" ]; then
         log_info "Backing up Argo Workflows archive..."
         for pvc in $argo_pvcs; do
-            backup_pvc_data "${BP_NAMESPACE}" "$pvc" "${bp_volumes_dir}/argo-${pvc}.tar.gz"
+            backup_pvc_data "${BP_NAMESPACE}" "$pvc" "${bp_volumes_dir}/${pvc}.tar.gz"
         done
     fi
 }
@@ -326,23 +286,8 @@ backup_observability_plane() {
         log_warning "Observability Plane namespace '${OP_NAMESPACE}' not found, skipping"
         return 0
     fi
-    
-    # Backup all resources
-    kubectl --context="${KUBE_CONTEXT}" get all,configmaps,secrets,serviceaccounts,roles,rolebindings \
-        -n "${OP_NAMESPACE}" -o yaml > "${op_dir}/resources.yaml" 2>/dev/null || true
-    
-    # Backup Prometheus resources
-    log_info "Backing up Prometheus configurations..."
-    kubectl --context="${KUBE_CONTEXT}" get prometheuses,alertmanagers,servicemonitors,podmonitors,prometheusrules \
-        -n "${OP_NAMESPACE}" -o yaml > "${op_dir}/prometheus-config.yaml" 2>/dev/null || true
-    
-    # Backup OpenSearch Dashboard configurations
-    log_info "Backing up OpenSearch Dashboard configurations..."
-    kubectl --context="${KUBE_CONTEXT}" get configmaps -n "${OP_NAMESPACE}" \
-        -l app.kubernetes.io/name=opensearch-dashboards -o yaml > "${op_dir}/dashboards-config.yaml" 2>/dev/null || true
-    
-    # Backup Helm releases
-    helm --kube-context="${KUBE_CONTEXT}" list -n "${OP_NAMESPACE}" -o yaml > "${op_dir}/helm-releases.yaml" 2>/dev/null || true
+
+    log_info "Backing up Observability data (logs and metrics in PVCs)..."
     
     # Backup persistent volumes
     if [ "$SKIP_VOLUMES" != "true" ]; then
@@ -490,6 +435,70 @@ EOF
     fi
 }
 
+# Backup user workloads (PVCs and secrets from user namespaces)
+backup_user_workloads() {
+    log_step "Backing up user workload resources..."
+
+    local user_workloads_dir="${OUTPUT_DIR}/user-workloads"
+    mkdir -p "${user_workloads_dir}"
+
+    # System namespaces to exclude
+    local system_namespaces="kube-system|kube-public|kube-node-lease|default|${CP_NAMESPACE}|${DP_NAMESPACE}|${BP_NAMESPACE}|${OP_NAMESPACE}"
+
+    # Get all namespaces excluding system ones
+    local user_namespaces=$(kubectl --context="${KUBE_CONTEXT}" get namespaces -o jsonpath='{.items[*].metadata.name}' | \
+        tr ' ' '\n' | grep -Ev "^(${system_namespaces})$" || echo "")
+
+    if [ -z "$user_namespaces" ]; then
+        log_info "No user workload namespaces found"
+        return 0
+    fi
+
+    log_info "Found user workload namespaces: $(echo $user_namespaces | tr '\n' ' ')"
+
+    # Backup resources for each user namespace
+    for ns in $user_namespaces; do
+        log_info "Backing up namespace: ${ns}"
+
+        local ns_dir="${user_workloads_dir}/${ns}"
+        mkdir -p "${ns_dir}"
+
+        # Backup user workload resources (deployments, services, configmaps, etc.)
+        kubectl --context="${KUBE_CONTEXT}" get deployments,statefulsets,services,configmaps,ingress \
+            -n "${ns}" -o yaml > "${ns_dir}/resources.yaml" 2>/dev/null || true
+
+        # Backup user secrets (exclude helm-managed)
+        if [ "$SKIP_SECRETS" != "true" ]; then
+            log_info "  Backing up user secrets in ${ns}..."
+            kubectl --context="${KUBE_CONTEXT}" get secrets -n "${ns}" \
+                -o json | jq '.items | map(select(.metadata.labels."app.kubernetes.io/managed-by" != "Helm"))' | \
+                kubectl --context="${KUBE_CONTEXT}" create -f - --dry-run=client -o yaml > "${ns_dir}/secrets.yaml" 2>/dev/null || true
+        fi
+
+        # Backup PVCs and their data
+        if [ "$SKIP_VOLUMES" != "true" ]; then
+            local pvcs=$(kubectl --context="${KUBE_CONTEXT}" get pvc -n "${ns}" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
+
+            if [ -n "$pvcs" ]; then
+                log_info "Backing up PVCs in namespace ${ns}: ${pvcs}"
+                mkdir -p "${ns_dir}/volumes"
+
+                # Backup PVC definitions
+                kubectl --context="${KUBE_CONTEXT}" get pvc -n "${ns}" -o yaml > "${ns_dir}/pvcs.yaml" 2>/dev/null || true
+
+                # Backup PVC data
+                for pvc in $pvcs; do
+                    backup_pvc_data "${ns}" "$pvc" "${ns_dir}/volumes/${pvc}.tar.gz"
+                done
+            fi
+        fi
+
+        log_success "Namespace ${ns} backed up"
+    done
+
+    log_success "User workload resources backed up"
+}
+
 # Compress backup
 compress_backup() {
     if [ "$COMPRESS" != "true" ]; then
@@ -523,20 +532,29 @@ show_summary() {
     echo -e "${BOLD}Backup completed successfully!${RESET}\n"
     echo -e "${CYAN}Backup Location:${RESET} ${OUTPUT_DIR}"
     echo -e "${CYAN}Timestamp:${RESET} ${BACKUP_TIMESTAMP}"
-    
+
     if [ -d "${OUTPUT_DIR}" ]; then
         echo -e "\n${CYAN}Backup Size:${RESET}"
         du -sh "${OUTPUT_DIR}"
-        
+
         echo -e "\n${CYAN}Backup Contents:${RESET}"
         tree -L 2 "${OUTPUT_DIR}" 2>/dev/null || find "${OUTPUT_DIR}" -maxdepth 2 -type d
     fi
-    
+
     echo -e "\n${GREEN}${BOLD}Backup completed successfully!${RESET}"
+    echo -e "\n${CYAN}What was backed up:${RESET}"
+    echo -e "  • Custom resources (components, projects, organizations, environments)"
+    echo -e "  • User routes (HTTP/GRPC/TCP routes for workloads)"
+    echo -e "  • Observability data (Prometheus, OpenSearch)"
+    echo -e "  • Persistent volumes (system and user workloads)"
+    echo -e "  • User-added secrets"
+    echo -e "  • DataPlane/BuildPlane resources"
+    echo -e "\n${CYAN}What was NOT backed up (installed during cluster setup):${RESET}"
+    echo -e "  • CRDs (Custom Resource Definitions)"
     echo -e "\n${CYAN}Next Steps:${RESET}"
     echo -e "  1. Verify backup: ${YELLOW}./verify-backup.sh ${OUTPUT_DIR}${RESET}"
     echo -e "  2. Store backup in safe location"
-    echo -e "  3. Test restore procedure: ${YELLOW}../restore/restore-cluster.sh${RESET}"
+    echo -e "  3. To restore: Recreate k3d cluster and install helms, then run: ${YELLOW}../restore/restore-cluster.sh${RESET}"
 }
 
 # Show usage
@@ -544,7 +562,9 @@ show_usage() {
     cat << EOF
 Usage: $0 [OPTIONS]
 
-Backup OpenChoreo cluster data including all planes and persistent volumes.
+Backup OpenChoreo cluster data for restoration after cluster recreation.
+Includes: custom resources, observability data, persistent volumes, and secrets.
+Note: CRDs are NOT backed up (installed during cluster setup).
 
 Options:
   --output-dir DIR              Custom backup directory (default: ./backups/backup-TIMESTAMP)
@@ -682,12 +702,11 @@ EOF
     validate_prerequisites
     create_backup_structure
     save_metadata
-    backup_cluster_info
-    backup_crds
     backup_control_plane
     backup_data_plane
     backup_build_plane
     backup_observability_plane
+    backup_user_workloads
     compress_backup
     show_summary
 }

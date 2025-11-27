@@ -10,12 +10,13 @@
 #   4. Run this script to restore data only
 #
 # This script restores:
-#   - OpenChoreo custom resources (Projects, Organizations, Environments)
-#   - User workloads and configurations
-#   - Persistent volume data (logs, metrics)
+#   - OpenChoreo custom resources (Components, Projects, Organizations, Environments)
+#   - User workload namespaces (resources, secrets, PVCs)
+#   - Gateway configurations (HTTP routes, etc.)
+#   - Persistent volume data (observability logs/metrics, user workloads)
 #
 # This script SKIPS (because fresh install provides them):
-#   - CRDs (already installed)
+#   - CRDs (already installed during cluster setup)
 #   - Helm releases (already installed)
 #   - Infrastructure resources (Deployments, Services, etc.)
 
@@ -160,35 +161,111 @@ restore_openchoreo_resources() {
         log_info "[DRY RUN] Would restore OpenChoreo custom resources"
         return 0
     fi
-    
-    log_info "Restoring Projects, Organizations, Environments..."
+
+    log_info "Restoring Components, Projects, Organizations, Environments..."
     kubectl --context="${KUBE_CONTEXT}" apply -f "$cp_dir/openchoreo-resources.yaml" 2>/dev/null || {
         log_warning "Some resources may have failed to apply, continuing..."
     }
-    
-    log_success "OpenChoreo custom resources restored"
+
+    log_success "OpenChoreo custom resources restored (Components, Projects, Organizations, Environments)"
 }
 
 # Restore user workloads and configurations
 restore_user_workloads() {
     log_step "Restoring user workloads..."
-    
+
     local dp_dir="$BACKUP_DIR/data-plane"
-    
+
+    # Restore namespaces first (before any resources)
+    if [ -f "$dp_dir/namespaces.yaml" ]; then
+        log_info "Restoring component workload namespaces..."
+        kubectl --context="${KUBE_CONTEXT}" apply -f "$dp_dir/namespaces.yaml" 2>/dev/null || true
+    fi
+
     # Restore DataPlane resources
     if [ -f "$dp_dir/dataplane-resources.yaml" ]; then
         log_info "Restoring DataPlane resources..."
         kubectl --context="${KUBE_CONTEXT}" apply -f "$dp_dir/dataplane-resources.yaml" 2>/dev/null || true
     fi
-    
-    # Restore Gateway configurations (user-created)
+
+    # Restore user routes (HTTP/GRPC/TCP routes)
+    if [ -f "$dp_dir/routes.yaml" ]; then
+        log_info "Restoring user routes (HTTP/GRPC/TCP)..."
+        kubectl --context="${KUBE_CONTEXT}" apply -f "$dp_dir/routes.yaml" 2>/dev/null || true
+    fi
+
+    # Backward compatibility: old backups have gateway-config.yaml
     if [ -f "$dp_dir/gateway-config.yaml" ]; then
-        log_info "Restoring user Gateway configurations..."
-        # Filter to only apply user-created resources, not system ones
+        log_info "Restoring routes from legacy backup..."
         kubectl --context="${KUBE_CONTEXT}" apply -f "$dp_dir/gateway-config.yaml" 2>/dev/null || true
     fi
-    
+
     log_success "User workloads restored"
+}
+
+# Restore user workload namespaces (from user-workloads backup)
+restore_user_namespaces() {
+    log_step "Restoring user workload namespaces..."
+
+    local user_workloads_dir="$BACKUP_DIR/user-workloads"
+
+    if [ ! -d "$user_workloads_dir" ]; then
+        log_info "No user workload namespaces found in backup"
+        return 0
+    fi
+
+    if [ "$DRY_RUN" = "true" ]; then
+        log_info "[DRY RUN] Would restore user workload namespaces"
+        return 0
+    fi
+
+    # Get all user namespace directories
+    for ns_dir in "$user_workloads_dir"/*; do
+        [ -d "$ns_dir" ] || continue
+
+        local ns=$(basename "$ns_dir")
+        log_info "Restoring namespace: ${ns}"
+
+        # Create namespace if it doesn't exist
+        kubectl --context="${KUBE_CONTEXT}" create namespace "$ns" 2>/dev/null || true
+
+        # Restore resources
+        if [ -f "$ns_dir/resources.yaml" ]; then
+            log_info "  Restoring resources in namespace ${ns}..."
+            kubectl --context="${KUBE_CONTEXT}" apply -f "$ns_dir/resources.yaml" 2>/dev/null || {
+                log_warning "  Some resources in ${ns} may have failed to apply"
+            }
+        fi
+
+        # Restore secrets
+        if [ -f "$ns_dir/secrets.yaml" ]; then
+            log_info "  Restoring secrets in namespace ${ns}..."
+            kubectl --context="${KUBE_CONTEXT}" apply -f "$ns_dir/secrets.yaml" 2>/dev/null || true
+        fi
+
+        # Restore PVCs
+        if [ "$SKIP_VOLUMES" != "true" ] && [ -f "$ns_dir/pvcs.yaml" ]; then
+            log_info "  Restoring PVCs in namespace ${ns}..."
+            kubectl --context="${KUBE_CONTEXT}" apply -f "$ns_dir/pvcs.yaml" 2>/dev/null || true
+
+            # Wait for PVCs to be bound
+            sleep 5
+
+            # Restore PVC data
+            if [ -d "$ns_dir/volumes" ]; then
+                for volume_file in "$ns_dir/volumes"/*.tar.gz; do
+                    [ -f "$volume_file" ] || continue
+
+                    local pvc_name=$(basename "$volume_file" .tar.gz)
+                    restore_pvc_data "$ns" "$pvc_name" "$volume_file"
+                done
+            fi
+        fi
+
+        log_success "Namespace ${ns} restored"
+    done
+
+    log_success "User workload namespaces restored"
 }
 
 # Restore Build Plane user data
@@ -225,26 +302,19 @@ restore_build_plane_data() {
 # Restore Build Plane volumes
 restore_build_plane_volumes() {
     log_info "Restoring Build Plane persistent volumes..."
-    
+
     local bp_volumes_dir="$BACKUP_DIR/build-plane/volumes"
-    
+
     # Wait for PVCs to be created by fresh install
     log_info "Waiting for Build Plane PVCs to be ready..."
     sleep 10
-    
-    # Restore registry volumes
-    for volume_file in "$bp_volumes_dir"/registry-*.tar.gz; do
+
+    # Restore all Build Plane volumes (registry, argo, etc.)
+    for volume_file in "$bp_volumes_dir"/*.tar.gz; do
         [ -f "$volume_file" ] || continue
-        
-        local pvc_name=$(basename "$volume_file" .tar.gz | sed 's/^registry-//')
-        restore_pvc_data "${BP_NAMESPACE}" "$pvc_name" "$volume_file"
-    done
-    
-    # Restore Argo volumes
-    for volume_file in "$bp_volumes_dir"/argo-*.tar.gz; do
-        [ -f "$volume_file" ] || continue
-        
-        local pvc_name=$(basename "$volume_file" .tar.gz | sed 's/^argo-//')
+
+        local pvc_name=$(basename "$volume_file" .tar.gz)
+        log_info "Restoring Build Plane PVC: ${pvc_name}..."
         restore_pvc_data "${BP_NAMESPACE}" "$pvc_name" "$volume_file"
     done
 }
@@ -394,9 +464,11 @@ verify_restore() {
     
     # Check OpenChoreo custom resources
     log_info "Checking OpenChoreo resources..."
+    local component_count=$(kubectl --context="${KUBE_CONTEXT}" get components -A --no-headers 2>/dev/null | wc -l)
     local project_count=$(kubectl --context="${KUBE_CONTEXT}" get projects -A --no-headers 2>/dev/null | wc -l)
     local org_count=$(kubectl --context="${KUBE_CONTEXT}" get organizations -A --no-headers 2>/dev/null | wc -l)
-    
+
+    log_info "  Components restored: ${component_count}"
     log_info "  Projects restored: ${project_count}"
     log_info "  Organizations restored: ${org_count}"
     
@@ -418,17 +490,19 @@ show_summary() {
     echo -e "${CYAN}Backup:${RESET} ${BACKUP_DIR}"
     
     echo -e "\n${GREEN}${BOLD}What was restored:${RESET}"
-    echo -e "  ✅ OpenChoreo custom resources (Projects, Organizations, Environments)"
-    echo -e "  ✅ User workloads and configurations"
+    echo -e "  ✅ OpenChoreo custom resources (Components, Projects, Organizations, Environments)"
+    echo -e "  ✅ User routes (HTTP/GRPC/TCP routes for workloads)"
+    echo -e "  ✅ User workload namespaces (resources and secrets)"
     if [ "$SKIP_VOLUMES" != "true" ]; then
-        echo -e "  ✅ Persistent volume data (logs, metrics, registry)"
+        echo -e "  ✅ Persistent volume data (observability, user workloads)"
     fi
-    
+
     echo -e "\n${CYAN}Next Steps:${RESET}"
-    echo -e "  1. Verify resources: ${YELLOW}kubectl --context=${KUBE_CONTEXT} get projects,organizations -A${RESET}"
-    echo -e "  2. Check logs: ${YELLOW}Access OpenSearch Dashboard at http://localhost:11081${RESET}"
-    echo -e "  3. Check metrics: ${YELLOW}Access Prometheus (if installed)${RESET}"
-    echo -e "  4. Verify applications: ${YELLOW}kubectl --context=${KUBE_CONTEXT} get all -A${RESET}"
+    echo -e "  1. Verify custom resources: ${YELLOW}kubectl --context=${KUBE_CONTEXT} get components,projects,organizations -A${RESET}"
+    echo -e "  2. Check user namespaces: ${YELLOW}kubectl --context=${KUBE_CONTEXT} get namespaces${RESET}"
+    echo -e "  3. Check logs: ${YELLOW}Access OpenSearch Dashboard (if configured)${RESET}"
+    echo -e "  4. Check metrics: ${YELLOW}Access Prometheus (if configured)${RESET}"
+    echo -e "  5. Verify applications: ${YELLOW}kubectl --context=${KUBE_CONTEXT} get all -A${RESET}"
 }
 
 # Show usage
@@ -441,12 +515,13 @@ Restore user data and custom resources after fresh OpenChoreo installation.
 IMPORTANT: Run this AFTER a fresh installation with install-single-cluster.sh
 
 What this restores:
-  - OpenChoreo custom resources (Projects, Organizations, Environments)
-  - User workloads and configurations
-  - Persistent volume data (logs in OpenSearch, metrics in Prometheus)
+  - OpenChoreo custom resources (Components, Projects, Organizations, Environments)
+  - User routes (HTTP routes, GRPC routes, TCP routes for workloads)
+  - User workload namespaces (all resources, secrets, PVCs)
+  - Persistent volume data (observability logs/metrics, user workloads)
 
 What this does NOT restore (comes from fresh install):
-  - CRDs (already installed)
+  - CRDs (already installed during cluster setup)
   - Helm releases (already installed)
   - Infrastructure resources (Deployments, Services, etc.)
 
@@ -454,7 +529,7 @@ Workflow:
   1. Create backup:    cd backup && ./backup-cluster.sh
   2. Delete cluster:   k3d cluster delete openchoreo
   3. Fresh install:    cd installation && ./install-single-cluster.sh
-  4. Restore data:     cd restore && ./restore-data-only.sh --backup-dir ../backup/backups/backup-*
+  4. Restore data:     cd restore && ./restore-data.sh --backup-dir ../backup/backups/backup-*
 
 Options:
   --backup-dir DIR              Path to backup directory (required)
@@ -543,6 +618,7 @@ EOF
     confirm_restore
     restore_openchoreo_resources
     restore_user_workloads
+    restore_user_namespaces
     restore_build_plane_data
     restore_observability_data
     verify_restore
