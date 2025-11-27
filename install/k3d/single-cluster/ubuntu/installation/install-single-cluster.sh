@@ -390,61 +390,27 @@ install_helm_chart() {
     fi
 }
 
-patch_openchoreo_host() {
-    log_info "Patching ingresses to use upstream instead of localhost domains..."
+# Wait for CRD to be available
+wait_for_crd() {
+    local crd_name="$1"
+    local timeout="${2:-60}"
+    local interval="${3:-2}"
+    local elapsed=0
     
-    # Patch OpenChoreo API ingress
-    kubectl --context="${KUBE_CONTEXT}" patch ingress -n openchoreo-control-plane \
-        openchoreo-api --type=json \
-        -p='[{"op": "replace", "path": "/spec/rules/0/host", "value": "api.openchoreo.upstream"}]' \
-        2>/dev/null || log_warning "Failed to patch openchoreo-api ingress"
+    log_info "Waiting for CRD '${crd_name}' to be available..."
     
-    # Patch Backstage ingress
-    kubectl --context="${KUBE_CONTEXT}" patch ingress -n openchoreo-control-plane \
-        openchoreo-ui --type=json \
-        -p='[{"op": "replace", "path": "/spec/rules/0/host", "value": "openchoreo.upstream"}]' \
-        2>/dev/null || log_warning "Failed to patch backstage ingress"
+    while [ $elapsed -lt $timeout ]; do
+        if kubectl --context="${KUBE_CONTEXT}" get crd "${crd_name}" >/dev/null 2>&1; then
+            log_success "CRD '${crd_name}' is available"
+            return 0
+        fi
+        sleep $interval
+        elapsed=$((elapsed + interval))
+        log_info "Waiting for CRD '${crd_name}'... (${elapsed}s/${timeout}s)"
+    done
     
-    # Patch Asgardeo Thunder ingress
-    kubectl --context="${KUBE_CONTEXT}" patch ingress -n openchoreo-control-plane \
-        openchoreo-asgardeo-thunder --type=json \
-        -p='[{"op": "replace", "path": "/spec/rules/0/host", "value": "thunder.openchoreo.upstream"}]' \
-        2>/dev/null || log_warning "Failed to patch asgardeo-thunder ingress"
-
-
-    log_info "Patching Backstage deployment environment variables to use upstream instead of localhost domains..."
-    
-    # Find the BACKSTAGE_BASE_URL environment variable index
-    BACKSTAGE_BASE_URL_INDEX=$(kubectl --context="${KUBE_CONTEXT}" get deployment -n openchoreo-control-plane \
-        openchoreo-ui -o json | \
-        jq '.spec.template.spec.containers[0].env | map(.name) | index("BACKSTAGE_BASE_URL")' 2>/dev/null)
-    
-    if [[ -n "$BACKSTAGE_BASE_URL_INDEX" && "$BACKSTAGE_BASE_URL_INDEX" != "null" ]]; then
-        kubectl --context="${KUBE_CONTEXT}" patch deployment -n openchoreo-control-plane \
-            openchoreo-ui --type=json \
-            -p="[{\"op\": \"replace\", \"path\": \"/spec/template/spec/containers/0/env/${BACKSTAGE_BASE_URL_INDEX}/value\", \"value\": \"http://openchoreo.upstream:8080\"}]" \
-            2>/dev/null || log_warning "Failed to patch BACKSTAGE_BASE_URL environment variable"
-    else
-        log_warning "BACKSTAGE_BASE_URL environment variable not found"
-    fi
-    
-    # Find the OPENCHOREO_AUTH_AUTHORIZATION_URL environment variable index
-    AUTH_URL_INDEX=$(kubectl --context="${KUBE_CONTEXT}" get deployment -n openchoreo-control-plane \
-        openchoreo-ui -o json | \
-        jq '.spec.template.spec.containers[0].env | map(.name) | index("OPENCHOREO_AUTH_AUTHORIZATION_URL")' 2>/dev/null)
-    
-    if [[ -n "$AUTH_URL_INDEX" && "$AUTH_URL_INDEX" != "null" ]]; then
-        kubectl --context="${KUBE_CONTEXT}" patch deployment -n openchoreo-control-plane \
-            openchoreo-ui --type=json \
-            -p="[{\"op\": \"replace\", \"path\": \"/spec/template/spec/containers/0/env/${AUTH_URL_INDEX}/value\", \"value\": \"http://thunder.openchoreo.upstream:8080/oauth2/authorize\"}]" \
-            2>/dev/null || log_warning "Failed to patch OPENCHOREO_AUTH_AUTHORIZATION_URL environment variable"
-    else
-        log_warning "OPENCHOREO_AUTH_AUTHORIZATION_URL environment variable not found"
-    fi
-    
-    log_info "Waiting for Backstage deployment to rollout after patching..."
-    kubectl --context="${KUBE_CONTEXT}" rollout status deployment/openchoreo-ui -n openchoreo-control-plane --timeout=300s \
-        2>/dev/null || log_warning "Backstage rollout may still be in progress"
+    log_error "CRD '${crd_name}' did not become available within ${timeout} seconds"
+    return 1
 }
 
 create_ingress_middleware() {
@@ -454,71 +420,24 @@ create_ingress_middleware() {
     kubectl --context="${KUBE_CONTEXT}" get namespace openchoreo-control-plane >/dev/null 2>&1 || \
         kubectl --context="${KUBE_CONTEXT}" create namespace openchoreo-control-plane
 
-    kubectl --context="${KUBE_CONTEXT}" apply -f "${SCRIPT_DIR}/ingress-middleware.yaml"
-    
-    log_success "Ingress middleware created successfully"
-}
-
-annotate_ingress_with_middleware() {
-    log_step "Annotating ingress with middleware..."
-    
-    kubectl annotate ingress openchoreo-ui -n openchoreo-control-plane \
-    traefik.ingress.kubernetes.io/router.middlewares=openchoreo-control-plane-strip-hsts@kubernetescrd \
-    --overwrite
-
-    kubectl annotate ingress openchoreo-asgardeo-thunder -n openchoreo-control-plane \
-    traefik.ingress.kubernetes.io/router.middlewares=openchoreo-control-plane-strip-hsts@kubernetescrd \
-    --overwrite
-    
-    log_success "Ingresses annotated with middleware successfully"
-}
-
-update_backstage_application() {
-    echo "Updating Backstage application configuration..."
-    
-    # Get all applications
-    local apps_response=$(curl -s http://localhost:8080/applications -H 'Host: thunder.openchoreo.upstream')
-    
-    # Extract Backstage application ID
-    local backstage_id=$(echo "$apps_response" | jq -r '.applications[] | select(.name=="Backstage") | .id')
-    
-    if [ -z "$backstage_id" ]; then
-        echo "Error: Backstage application not found"
+    # Wait for Traefik Middleware CRD to be available
+    if ! wait_for_crd "middlewares.traefik.io" 60; then
+        log_error "Traefik Middleware CRD is not available. Traefik may not be properly installed."
         return 1
     fi
     
-    echo "Found Backstage application with ID: $backstage_id"
-    
-    # Get full application details
-    local app_details=$(curl -s "http://localhost:8080/applications/$backstage_id" -H 'Host: thunder.openchoreo.upstream')
-    
-    # Update the application with patches
-    local updated_app=$(echo "$app_details" | jq '.inbound_auth_config[0].config.redirect_uris = ["http://openchoreo.upstream:8080/api/auth/default-idp/handler/frame", "http://localhost:7007/api/auth/default-idp/handler/frame"] | .inbound_auth_config[0].config.client_secret = "backstage-portal-secret"')
-    
-    # Send PUT request to update the application
-    curl -X PUT "http://localhost:8080/applications/$backstage_id" \
-        -H 'Host: thunder.openchoreo.upstream' \
-        -H 'Content-Type: application/json' \
-        -d "$updated_app"
-    
-    echo "Backstage application updated successfully"
-}
-
-update_thunder_cm() {
-    log_info "Updating openchoreo-asgardeo-thunder-config ConfigMap..."
-    
-    # Get the ConfigMap, replace all occurrences, and apply back
-    kubectl --context="${KUBE_CONTEXT}" get configmap -n openchoreo-control-plane \
-        openchoreo-asgardeo-thunder-config -o yaml | \
-        sed 's/thunder\.openchoreo\.localhost/thunder.openchoreo.upstream/g' | \
-        kubectl --context="${KUBE_CONTEXT}" apply -f -
-    
-    log_info "Thunder ConfigMap updated successfully"
+    # Apply the middleware
+    log_info "Applying ingress middleware..."
+    if kubectl --context="${KUBE_CONTEXT}" apply -f "${SCRIPT_DIR}/ingress-middleware.yaml"; then
+        log_success "Ingress middleware created successfully"
+    else
+        log_error "Failed to create ingress middleware"
+        return 1
+    fi
 }
 
 # Install Control Plane
 install_control_plane() {
-    log_step "Creating ingress middleware"
     create_ingress_middleware
 
     log_step "Installing OpenChoreo Control Plane..."
@@ -534,11 +453,6 @@ install_control_plane() {
         -n openchoreo-control-plane \
         -l app.kubernetes.io/name=openchoreo-control-plane \
         --timeout=600s || log_warning "Some Control Plane pods may not be ready yet"
-    
-    # patch_openchoreo_host
-    # annotate_ingress_with_middleware
-    # update_backstage_application
-    # update_thunder_cm
 }
 
 # Install Data Plane
@@ -578,6 +492,11 @@ install_build_plane() {
 # Install Observability Plane
 install_observability_plane() {
     log_step "Installing OpenChoreo Observability Plane..."
+
+    log_info "Installing opensearch operator"
+    helm repo add opensearch-operator https://opensearch-project.github.io/opensearch-k8s-operator/
+    helm repo update
+    helm install opensearch-operator opensearch-operator/opensearch-operator --create-namespace -n openchoreo-observability-plane
 
     install_helm_chart \
         "openchoreo-observability-plane" \
@@ -680,10 +599,19 @@ create_dataplane_resource() {
         return 1
     fi
     
-    if bash "$script" --control-plane-context "${KUBE_CONTEXT}"; then
+    # Create temporary copy and replace publicVirtualHost value
+    local temp_script
+    temp_script=$(mktemp)
+    sed 's/publicVirtualHost: openchoreoapis\.localhost/publicVirtualHost: openchoreoapis.upstream/g' "$script" > "$temp_script"
+    chmod +x "$temp_script"
+    
+    # Execute the modified script
+    if bash "$temp_script" --control-plane-context "${KUBE_CONTEXT}"; then
         log_success "DataPlane resource created successfully"
+        rm -f "$temp_script"
     else
         log_error "Failed to create DataPlane resource"
+        rm -f "$temp_script"
         return 1
     fi
 }

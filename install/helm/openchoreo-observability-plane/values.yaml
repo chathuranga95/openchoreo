@@ -86,6 +86,7 @@ openSearchCluster:
     version: 3.3.0
     additionalConfig:
       pluginsSecurityDisabled: "true"
+    setVMMaxMapCount: true
 
   dashboard:
     enabled: false
