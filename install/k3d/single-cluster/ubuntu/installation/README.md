@@ -121,6 +121,10 @@ docker system df
 docker system prune -a
 ```
 
+## Permission issues on helm installation directories
+sudo chown -R $USER:$(id -gn) install/helm/*/charts/
+chmod -R u+w install/helm/*/charts/
+
 ## Important Notes
 
 1. **Docker Group**: After installation, if you see Docker permission errors, log out and back in (or run `newgrp docker`)

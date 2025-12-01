@@ -360,6 +360,45 @@ preload_images() {
     fi
 }
 
+# Fix permissions on Helm chart directories
+fix_helm_chart_permissions() {
+    local chart_path="$1"
+    
+    if [[ ! -d "$chart_path" ]]; then
+        return 0
+    fi
+    
+    # Ensure the chart directory itself is writable
+    if [[ ! -w "$chart_path" ]]; then
+        log_info "Fixing permissions on chart directory: ${chart_path}"
+        chmod -R u+w "$chart_path" 2>/dev/null || true
+        # Change ownership to current user if needed (only if we have sudo)
+        if ! [[ -O "$chart_path" ]] && sudo -n true 2>/dev/null; then
+            sudo chown -R "$USER:$(id -gn)" "$chart_path" 2>/dev/null || true
+        fi
+    fi
+    
+    # Ensure charts directory exists and is writable
+    local charts_dir="${chart_path}/charts"
+    if [[ ! -d "$charts_dir" ]]; then
+        log_info "Creating charts directory: ${charts_dir}"
+        mkdir -p "$charts_dir"
+        chmod 755 "$charts_dir"
+    fi
+    
+    if [[ -d "$charts_dir" ]]; then
+        # Fix permissions on existing charts directory
+        if [[ ! -w "$charts_dir" ]]; then
+            log_info "Fixing permissions on charts directory: ${charts_dir}"
+            chmod -R u+w "$charts_dir" 2>/dev/null || true
+            # Change ownership to current user if needed (only if we have sudo)
+            if ! [[ -O "$charts_dir" ]] && sudo -n true 2>/dev/null; then
+                sudo chown -R "$USER:$(id -gn)" "$charts_dir" 2>/dev/null || true
+            fi
+        fi
+    fi
+}
+
 # Install Helm chart
 install_helm_chart() {
     local release_name="$1"
@@ -368,6 +407,9 @@ install_helm_chart() {
     local values_file="$4"
     
     log_info "Installing ${release_name} in namespace ${namespace}..."
+    
+    # Fix permissions before updating dependencies
+    fix_helm_chart_permissions "$chart_path"
     
     local helm_args=(
         "install" "${release_name}" "${chart_path}"
@@ -496,7 +538,7 @@ install_observability_plane() {
     log_info "Installing opensearch operator"
     helm repo add opensearch-operator https://opensearch-project.github.io/opensearch-k8s-operator/
     helm repo update
-    helm install opensearch-operator opensearch-operator/opensearch-operator --create-namespace -n openchoreo-observability-plane
+    helm upgrade --install opensearch-operator opensearch-operator/opensearch-operator --create-namespace -n openchoreo-observability-plane
 
     install_helm_chart \
         "openchoreo-observability-plane" \
@@ -604,7 +646,11 @@ create_dataplane_resource() {
     
     # Create temporary copy and replace publicVirtualHost value
     local temp_script
-    temp_script=$(mktemp)
+    local script_dir
+    local script_name
+    script_dir=$(dirname "$script")
+    script_name=$(basename "$script")
+    temp_script="${script_dir}/temp_${script_name}"
     sed 's/publicVirtualHost: openchoreoapis\.localhost/publicVirtualHost: openchoreoapis.upstream/g' "$script" > "$temp_script"
     chmod +x "$temp_script"
     

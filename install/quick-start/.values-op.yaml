@@ -3,18 +3,14 @@
 
 # Global values shared across all components
 global:
-  # Common labels to add to all resources
   commonLabels: {}
+  installationMode: quickStart
 
-  # Installation mode for the OpenChoreo Observability Plane
-  # standard: Operator managed OpenSearch cluster will be deployed
-  # minimal: Single replica OpenSearch instance will be deployed
-  installationMode: minimal
-
-
-data-prepper:
+opensearch-operator:
   enabled: false
 
+opentelemetry-collector:
+  enabled: false
 
 openSearch:
   enabled: true

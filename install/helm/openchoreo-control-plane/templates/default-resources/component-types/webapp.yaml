@@ -7,8 +7,14 @@ metadata:
   namespace: default
   labels:
     {{- include "openchoreo-control-plane.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install, post-upgrade
+    "helm.sh/hook-weight": "7"
 spec:
   workloadType: deployment
+
+  allowedWorkflows:
+    - react
 
   schema:
     types:
@@ -137,7 +143,7 @@ spec:
           labels: ${metadata.labels}
         spec:
           parentRefs:
-            - name: gateway-external
+            - name: gateway-default
               namespace: openchoreo-data-plane
           hostnames:
             - ${metadata.componentName}-${metadata.environmentName}.${dataplane.publicVirtualHost}
