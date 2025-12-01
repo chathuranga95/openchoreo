@@ -37,3 +37,5 @@ go.work
 
 # Log files
 *.log
+
+install/k3d/single-cluster/ubuntu/installation/values-*.yaml

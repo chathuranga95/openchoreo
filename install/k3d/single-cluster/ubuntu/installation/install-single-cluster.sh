@@ -84,6 +84,110 @@ check_install_jq() {
     fi
 }
 
+prepare_helm_values() {
+    log_step "Preparing Helm values files with overrides..."
+    
+    local value_overrides_dir="${SCRIPT_DIR}/value-overrides"
+    local planes=("cp" "bp" "dp" "op")
+    local plane_names=("control-plane" "build-plane" "data-plane" "observability-plane")
+    
+    for i in "${!planes[@]}"; do
+        local plane="${planes[$i]}"
+        local plane_name="${plane_names[$i]}"
+        local base_values="${SINGLE_CLUSTER_DIR}/values-${plane}.yaml"
+        local override_values="${value_overrides_dir}/${plane}.yaml"
+        local output_values="${SCRIPT_DIR}/values-${plane}.yaml"
+        
+        # Check if base values file exists
+        if [[ ! -f "$base_values" ]]; then
+            log_warning "Base values file not found: $base_values, skipping..."
+            continue
+        fi
+        
+        # If override file exists, merge it with base values
+        if [[ -f "$override_values" ]]; then
+            log_info "Merging ${plane_name} values: $base_values + $override_values -> $output_values"
+            
+            # Try to use yq for merging if available
+            if command_exists yq; then
+                # Use yq to merge: base values first, then override values (override takes precedence)
+                # The *+ operator does deep merge: objects are merged recursively, arrays are appended
+                # Try yq v4 syntax with proper deep merge (ireduce) - merges all files into one document
+                local merge_success=false
+                local temp_output=$(mktemp)
+                
+                # Try yq v4 ireduce syntax (best for deep merge)
+                if yq eval-all '. as $item ireduce ({}; . *+ $item)' "$base_values" "$override_values" > "$temp_output" 2>/dev/null; then
+                    # Check if output is valid and doesn't contain document separators (---)
+                    if [[ -s "$temp_output" ]] && ! grep -q "^---$" "$temp_output" 2>/dev/null; then
+                        # Remove duplicate header comments if present (keep only first occurrence)
+                        awk '/^# Helm values for/ && seen++ {next} 1' "$temp_output" > "${temp_output}.clean" 2>/dev/null && mv "${temp_output}.clean" "$temp_output" 2>/dev/null || true
+                        mv "$temp_output" "$output_values"
+                        merge_success=true
+                        log_success "Merged ${plane_name} values using yq (v4 ireduce)"
+                    fi
+                fi
+                
+                # Fallback to yq v4 multiply syntax
+                if [[ "$merge_success" == "false" ]] && [[ -f "$temp_output" ]]; then
+                    if yq eval-all 'select(fileIndex == 0) * select(fileIndex == 1)' "$base_values" "$override_values" > "$temp_output" 2>/dev/null; then
+                        if [[ -s "$temp_output" ]] && ! grep -q "^---$" "$temp_output" 2>/dev/null; then
+                            mv "$temp_output" "$output_values"
+                            merge_success=true
+                            log_success "Merged ${plane_name} values using yq (v4 multiply)"
+                        fi
+                    fi
+                fi
+                
+                # Try yq v3 syntax (merge with array append)
+                if [[ "$merge_success" == "false" ]] && [[ -f "$temp_output" ]]; then
+                    if yq merge -a "$base_values" "$override_values" > "$temp_output" 2>/dev/null; then
+                        if [[ -s "$temp_output" ]]; then
+                            mv "$temp_output" "$output_values"
+                            merge_success=true
+                            log_success "Merged ${plane_name} values using yq (v3)"
+                        fi
+                    fi
+                fi
+                
+                # Cleanup temp file if it still exists
+                [[ -f "$temp_output" ]] && rm -f "$temp_output"
+                
+                if [[ "$merge_success" == "false" ]]; then
+                    log_error "Failed to merge ${plane_name} values using yq"
+                    exit 1
+                fi
+            # Fallback: simple file append (not a true deep merge)
+            elif command_exists helm; then
+                log_warning "yq not found, using simple append merge (may not support deep merge)"
+                # Helm doesn't output merged values directly, so we'll combine files
+                # This is a simple merge - override values are appended (not a true deep merge)
+                cp "$base_values" "$output_values"
+                echo "" >> "$output_values"
+                echo "# Overrides from ${override_values}" >> "$output_values"
+                cat "$override_values" >> "$output_values"
+                log_warning "Used simple append merge for ${plane_name}. Install yq for proper deep merge: https://github.com/mikefarah/yq"
+            else
+                log_error "Neither yq nor helm found. Cannot merge values files."
+                log_info "Please install yq: https://github.com/mikefarah/yq"
+                exit 1
+            fi
+        else
+            # No override file, just copy base values
+            log_info "No override file found for ${plane_name}, using base values: $base_values -> $output_values"
+            cp "$base_values" "$output_values"
+        fi
+        
+        # Verify output file was created
+        if [[ ! -f "$output_values" ]]; then
+            log_error "Failed to create values file: $output_values"
+            exit 1
+        fi
+    done
+    
+    log_success "Helm values files prepared successfully"
+}
+
 # Check and install Docker
 check_install_docker() {
     log_step "Checking Docker installation..."
@@ -878,6 +982,9 @@ EOF
     
     # Create cluster
     create_cluster
+    
+    # Prepare Helm values files with overrides
+    prepare_helm_values
     
     # Preload images if requested
     if [[ "$PRELOAD_IMAGES" == "true" ]]; then
