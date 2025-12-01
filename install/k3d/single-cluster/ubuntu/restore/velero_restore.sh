@@ -25,6 +25,11 @@ BACKUP_NAME="${BACKUP_NAME:-}"
 RESTORE_NAME="${RESTORE_NAME:-}"
 VELERO_NAMESPACE="${VELERO_NAMESPACE:-velero}"
 
+# Backup root directory (can be overridden via environment variable)
+if [ -z "${BACKUP_ROOT}" ]; then
+    BACKUP_ROOT="$(dirname "${REPO_ROOT}")/openchoreo-backups"
+fi
+
 # Restore options
 RESTORE_VOLUMES="${RESTORE_VOLUMES:-true}"
 WAIT_FOR_COMPLETION="${WAIT_FOR_COMPLETION:-true}"
@@ -59,6 +64,9 @@ log_step() {
 command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
+
+# Velero uses --kubecontext flag (not --context)
+# This function is kept for reference but we'll use --kubecontext flag directly
 
 # Validate prerequisites
 validate_prerequisites() {
@@ -113,30 +121,42 @@ validate_backup() {
     if [ -z "$BACKUP_NAME" ]; then
         log_error "No backup specified"
         log_info "Available backups:"
-        velero backup get --context="${KUBE_CONTEXT}"
+        velero backup get --kubecontext="${KUBE_CONTEXT}"
         exit 1
     fi
     
-    # Check backup exists
-    if ! velero backup get "${BACKUP_NAME}" >/dev/null 2>&1; then
+    # Check backup exists and get status
+    local backup_info=$(velero backup get "${BACKUP_NAME}" --kubecontext="${KUBE_CONTEXT}" 2>/dev/null)
+    
+    if [ -z "$backup_info" ]; then
         log_error "Backup '${BACKUP_NAME}' not found"
         log_info "Available backups:"
-        velero backup get
+        velero backup get --kubecontext="${KUBE_CONTEXT}"
         exit 1
     fi
     
-    # Check backup status
-    local status=$(velero backup describe "${BACKUP_NAME}" 2>/dev/null | \
-        grep "Phase:" | awk '{print $2}')
+    # Extract status from backup get output (format: NAME STATUS CREATED EXPIRES STORAGE LOCATION SELECTOR)
+    local status=$(echo "$backup_info" | tail -n +2 | grep "${BACKUP_NAME}" | awk '{print $2}' | tr -d '[:space:]')
     
-    if [ "$status" != "Completed" ]; then
+    # If status is empty, try backup describe as fallback
+    if [ -z "$status" ]; then
+        local describe_output=$(velero backup describe "${BACKUP_NAME}" --kubecontext="${KUBE_CONTEXT}" 2>/dev/null)
+        status=$(echo "$describe_output" | grep -E "^Phase:" | awk '{print $2}' | tr -d '[:space:]')
+    fi
+    
+    # Normalize status (handle case variations)
+    status=$(echo "$status" | tr '[:lower:]' '[:upper:]')
+    
+    if [ "$status" != "COMPLETED" ]; then
         log_error "Backup '${BACKUP_NAME}' is not in 'Completed' state (status: ${status})"
+        log_info "Backup details:"
+        velero backup describe "${BACKUP_NAME}" --kubecontext="${KUBE_CONTEXT}" | head -20
         exit 1
     fi
     
     # Display backup info
     log_info "Backup Information:"
-    velero backup describe "${BACKUP_NAME}" | head -20
+    velero backup describe "${BACKUP_NAME}" --kubecontext="${KUBE_CONTEXT}" | head -20
     
     log_success "Backup validated"
 }
@@ -145,15 +165,32 @@ validate_backup() {
 import_backup() {
     log_step "Importing backup to k3d node..."
     
-    local backup_root="$(dirname "${REPO_ROOT}")/openchoreo-backups"
-    local backup_dir="${backup_root}/local/backups/${BACKUP_NAME}"
+    local backup_dir="${BACKUP_ROOT}/local/backups/${BACKUP_NAME}"
     local k3d_node="k3d-${CLUSTER_NAME}-server-0"
+    
+    # Debug: Show paths being used
+    log_info "REPO_ROOT: ${REPO_ROOT}"
+    log_info "BACKUP_ROOT: ${BACKUP_ROOT}"
+    log_info "Backup directory: ${backup_dir}"
+    log_info "K3D node: ${k3d_node}"
     
     # Check if backup exists on host
     if [ ! -d "$backup_dir" ]; then
-        log_error "Backup not found on host: $backup_dir"
-        log_info "Available backups:"
-        ls -1 "${backup_root}/local/backups/" 2>/dev/null || echo "  (none found)"
+        log_error "Backup directory not found: ${BACKUP_NAME}"
+        log_error "Expected path: $backup_dir"
+        log_info "Checking if backup root exists: ${BACKUP_ROOT}"
+        if [ -d "$BACKUP_ROOT" ]; then
+            log_info "Backup root exists. Available backups:"
+            ls -1 "${BACKUP_ROOT}/local/backups/" 2>/dev/null || echo "  (none found in local/backups/)"
+            # Also check if backups are in a different location
+            log_info "Searching for backup in alternative locations..."
+            find "${BACKUP_ROOT}" -type d -name "${BACKUP_NAME}" 2>/dev/null | head -5 || true
+        else
+            log_error "Backup root directory does not exist: ${BACKUP_ROOT}"
+            log_info "You can override BACKUP_ROOT via environment variable:"
+            log_info "  export BACKUP_ROOT=/path/to/openchoreo-backups"
+            log_info "Or ensure backups are located at: ${BACKUP_ROOT}/local/backups/"
+        fi
         exit 1
     fi
     
@@ -161,25 +198,49 @@ import_backup() {
     log_info "Copying to k3d node: ${k3d_node}"
     
     # Copy backup to k3d node
-    docker cp "${backup_root}/local" "${k3d_node}:${backup_root}/" || {
+    docker cp "${BACKUP_ROOT}/local" "${k3d_node}:${BACKUP_ROOT}/" || {
         log_error "Failed to copy backup to k3d node"
         exit 1
     }
     
     # Verify backup is accessible in k3d node
-    docker exec "${k3d_node}" ls "${backup_root}/local/backups/${BACKUP_NAME}" >/dev/null 2>&1 || {
+    docker exec "${k3d_node}" ls "${BACKUP_ROOT}/local/backups/${BACKUP_NAME}" >/dev/null 2>&1 || {
         log_error "Backup not found in k3d node after copy"
         exit 1
     }
     
     log_success "Backup imported to k3d node"
     
-    # Verify MinIO can access
+    # Wait for MinIO to detect the backup
+    log_info "Waiting for MinIO to detect backup..."
     local minio_pod=$(kubectl --context="${KUBE_CONTEXT}" get pod -n velero -l app=minio -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
     
     if [ -n "$minio_pod" ]; then
-        log_info "Waiting for MinIO to detect backup..."
-        sleep 5
+        # Wait up to 60 seconds for Velero to detect the backup
+        local max_wait=60
+        local elapsed=0
+        local interval=2
+        
+        while [ $elapsed -lt $max_wait ]; do
+            # Check if Velero can see the backup
+            if velero backup get "${BACKUP_NAME}" --kubecontext="${KUBE_CONTEXT}" >/dev/null 2>&1; then
+                log_success "MinIO detected backup"
+                break
+            fi
+            
+            sleep $interval
+            elapsed=$((elapsed + interval))
+            if [ $((elapsed % 10)) -eq 0 ]; then
+                log_info "Still waiting for MinIO to detect backup... (${elapsed}s elapsed)"
+            fi
+        done
+        
+        if [ $elapsed -ge $max_wait ]; then
+            log_warning "MinIO may not have detected backup yet, but continuing..."
+            log_info "You may need to wait a bit longer or check MinIO logs"
+        fi
+    else
+        log_warning "MinIO pod not found, skipping detection wait"
     fi
 }
 
@@ -246,6 +307,7 @@ create_restore() {
     local restore_args=(
         "restore" "create" "${RESTORE_NAME}"
         "--from-backup" "${BACKUP_NAME}"
+        "--kubecontext" "${KUBE_CONTEXT}"
     )
     
     # Add restore volumes flag
@@ -269,7 +331,7 @@ create_restore() {
     if [ "$DRY_RUN" = "true" ]; then
         log_info "DRY RUN: Would execute: velero ${restore_args[*]}"
         log_info "Backup contents:"
-        velero backup describe "${BACKUP_NAME}" --details
+        velero backup describe "${BACKUP_NAME}" --kubecontext="${KUBE_CONTEXT}" --details
         log_success "Dry run complete - no changes made"
         exit 0
     fi
@@ -298,19 +360,19 @@ wait_for_restore() {
     local interval=10
     
     while [ $elapsed -lt $max_wait ]; do
-        local status=$(velero restore describe "${RESTORE_NAME}" 2>/dev/null | \
-            grep "Phase:" | awk '{print $2}')
+        local status=$(velero restore describe "${RESTORE_NAME}" --kubecontext="${KUBE_CONTEXT}" 2>/dev/null | \
+            grep "Phase:" | awk '{print $2}' | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')
         
         case $status in
-            Completed)
+            COMPLETED)
                 log_success "Restore completed"
                 return 0
                 ;;
-            Failed|PartiallyFailed)
+            FAILED|PARTIALLYFAILED)
                 log_error "Restore failed or partially failed"
                 return 1
                 ;;
-            InProgress)
+            INPROGRESS|NEW)
                 log_info "Restore in progress... (${elapsed}s elapsed)"
                 ;;
             *)
@@ -361,25 +423,25 @@ verify_restore() {
     
     # Get restore details
     log_info "Restore details:"
-    velero restore describe "${RESTORE_NAME}" --details || {
+    velero restore describe "${RESTORE_NAME}" --kubecontext="${KUBE_CONTEXT}" --details || {
         log_error "Failed to get restore details"
         return 1
     }
     
     # Check restore status
-    local phase_line=$(velero restore describe "${RESTORE_NAME}" 2>/dev/null | grep "^Phase:")
+    local phase_line=$(velero restore describe "${RESTORE_NAME}" --kubecontext="${KUBE_CONTEXT}" 2>/dev/null | grep "^Phase:")
     
     if echo "$phase_line" | grep -q "Completed"; then
         log_success "Restore phase: Completed"
     else
         log_error "Restore did not complete successfully"
         log_info "Phase: ${phase_line}"
-        velero restore logs "${RESTORE_NAME}" 2>/dev/null | grep -i error || true
+        velero restore logs "${RESTORE_NAME}" --kubecontext="${KUBE_CONTEXT}" 2>/dev/null | grep -i error || true
         return 1
     fi
     
     # Check for warnings
-    local warnings=$(velero restore describe "${RESTORE_NAME}" 2>/dev/null | \
+    local warnings=$(velero restore describe "${RESTORE_NAME}" --kubecontext="${KUBE_CONTEXT}" 2>/dev/null | \
         grep "Warnings:" | awk '{print $NF}')
     
     if [ -n "$warnings" ] && [ "$warnings" != "0" ]; then
@@ -421,7 +483,7 @@ show_summary() {
     echo -e "${CYAN}Cluster:${RESET} ${CLUSTER_NAME} (${KUBE_CONTEXT})"
     
     # Get restore info
-    local restore_info=$(velero restore describe "${RESTORE_NAME}" 2>/dev/null || echo "")
+    local restore_info=$(velero restore describe "${RESTORE_NAME}" --kubecontext="${KUBE_CONTEXT}" 2>/dev/null || echo "")
     
     if [ -n "$restore_info" ]; then
         local started=$(echo "$restore_info" | grep "Started:" | cut -d: -f2- | xargs)
@@ -491,6 +553,8 @@ Environment Variables:
   CLUSTER_NAME                 Cluster name [default: openchoreo]
   BACKUP_NAME                  Backup to restore from
   RESTORE_NAME                 Custom restore name
+  BACKUP_ROOT                  Backup root directory [default: <repo-parent>/openchoreo-backups]
+                               Example: export BACKUP_ROOT=/home/user/openchoreo-backups
 
 Examples:
   # List available backups
