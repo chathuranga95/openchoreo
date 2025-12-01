@@ -412,7 +412,9 @@ install_helm_chart() {
     fix_helm_chart_permissions "$chart_path"
     
     local helm_args=(
-        "install" "${release_name}" "${chart_path}"
+        "upgrade"
+        "--install"
+        "${release_name}" "${chart_path}"
         "--dependency-update"
         "--kube-context" "${KUBE_CONTEXT}"
         "--namespace" "${namespace}"

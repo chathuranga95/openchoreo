@@ -5,7 +5,9 @@ package releasebinding
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 
 	"gopkg.in/yaml.v3"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -28,13 +30,27 @@ var releasebindinglog = logf.Log.WithName("releasebinding-resource")
 
 // SetupReleaseBindingWebhookWithManager registers the webhook for ReleaseBinding in the manager.
 func SetupReleaseBindingWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).For(&openchoreodevv1alpha1.ReleaseBinding{}).
+	// Register mutating webhook manually because we implement admission.Handler
+	// instead of webhook.CustomDefaulter. This is necessary to access both old
+	// and new objects during updates, enabling preserve-when-empty logic for
+	// releaseName (e.g., preserving auto-populated values when users update
+	// other fields). The path must match the kubebuilder webhook marker below.
+	mutatingWebhook := &webhook.Admission{
+		Handler: &Defaulter{
+			decoder: admission.NewDecoder(mgr.GetScheme()),
+		},
+	}
+	mgr.GetWebhookServer().Register(
+		"/mutate-openchoreo-dev-v1alpha1-releasebinding",
+		mutatingWebhook,
+	)
+
+	// Register validating webhook
+	return ctrl.NewWebhookManagedBy(mgr).
+		For(&openchoreodevv1alpha1.ReleaseBinding{}).
 		WithValidator(&Validator{Client: mgr.GetClient()}).
-		WithDefaulter(&Defaulter{}).
 		Complete()
 }
-
-// TODO(user): EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 
 // +kubebuilder:webhook:path=/mutate-openchoreo-dev-v1alpha1-releasebinding,mutating=true,failurePolicy=fail,sideEffects=None,groups=openchoreo.dev,resources=releasebindings,verbs=create;update,versions=v1alpha1,name=mreleasebinding-v1alpha1.kb.io,admissionReviewVersions=v1
 
@@ -44,15 +60,41 @@ func SetupReleaseBindingWebhookWithManager(mgr ctrl.Manager) error {
 // NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
 // as it is used only for temporary operations and does not need to be deeply copied.
 type Defaulter struct {
-	// TODO(user): Add more fields as needed for defaulting
+	decoder admission.Decoder
 }
 
-var _ webhook.CustomDefaulter = &Defaulter{}
+var _ admission.Handler = &Defaulter{}
 
-// Default implements webhook.CustomDefaulter so a webhook will be registered for the Kind ReleaseBinding.
-func (d *Defaulter) Default(_ context.Context, obj runtime.Object) error {
-	// No-op: Defaulting logic disabled for now
-	return nil
+// Handle implements admission.Handler for custom defaulting logic with access to old object.
+func (d *Defaulter) Handle(ctx context.Context, req admission.Request) admission.Response {
+	releasebinding := &openchoreodevv1alpha1.ReleaseBinding{}
+
+	err := d.decoder.Decode(req, releasebinding)
+	if err != nil {
+		return admission.Errored(http.StatusBadRequest, err)
+	}
+
+	// For updates, preserve releaseName from old object if not specified in new object
+	if req.Operation == "UPDATE" && len(req.OldObject.Raw) > 0 {
+		oldBinding := &openchoreodevv1alpha1.ReleaseBinding{}
+		if err := d.decoder.DecodeRaw(req.OldObject, oldBinding); err != nil {
+			return admission.Errored(http.StatusBadRequest, err)
+		}
+
+		// Preserve old releaseName if update is missing it
+		// e.g: applying sample resources with auto deploy enabled, release auto created
+		if releasebinding.Spec.ReleaseName == "" && oldBinding.Spec.ReleaseName != "" {
+			releasebinding.Spec.ReleaseName = oldBinding.Spec.ReleaseName
+		}
+	}
+
+	// Marshal the modified object
+	marshaledBinding, err := json.Marshal(releasebinding)
+	if err != nil {
+		return admission.Errored(http.StatusInternalServerError, err)
+	}
+
+	return admission.PatchResponseFromRaw(req.Object.Raw, marshaledBinding)
 }
 
 // TODO(user): change verbs to "verbs=create;update;delete" if you want to enable deletion component.
@@ -103,11 +145,6 @@ func (v *Validator) ValidateCreate(ctx context.Context, obj runtime.Object) (adm
 
 // ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type ReleaseBinding.
 func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
-	_, ok := oldObj.(*openchoreodevv1alpha1.ReleaseBinding)
-	if !ok {
-		return nil, fmt.Errorf("expected a ReleaseBinding object for the oldObj but got %T", oldObj)
-	}
-
 	newBinding, ok := newObj.(*openchoreodevv1alpha1.ReleaseBinding)
 	if !ok {
 		return nil, fmt.Errorf("expected a ReleaseBinding object for the newObj but got %T", newObj)
@@ -119,6 +156,7 @@ func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.O
 
 	// Note: spec.environment, spec.owner.projectName, and spec.owner.componentName immutability are enforced by CEL rules in the CRD schema
 	// Note: Required field validations (owner, environment) are enforced by the CRD schema
+	// Note: releaseName preservation when empty is handled by the mutating webhook (Defaulter)
 
 	// Cross-resource validation: validate against ComponentRelease (only if releaseName is set)
 	if newBinding.Spec.ReleaseName != "" {
@@ -171,11 +209,11 @@ func (v *Validator) validateAgainstRelease(ctx context.Context, binding *opencho
 	}
 
 	// Validate envOverrides against ComponentType's envOverrides schema
-	if binding.Spec.ComponentTypeEnvOverrides != nil && len(binding.Spec.ComponentTypeEnvOverrides.Raw) > 0 {
-		allErrs = append(allErrs, v.validateEnvOverridesAgainstSchema(binding, &release.Spec.ComponentType)...)
-	}
+	// Always validate, using empty object if not provided (catches missing required fields)
+	allErrs = append(allErrs, v.validateEnvOverridesAgainstSchema(binding, &release.Spec.ComponentType)...)
 
 	// Validate traitOverrides against traits in the release
+	// Always validate each trait that has envOverrides schema (catches missing required fields)
 	allErrs = append(allErrs, v.validateTraitOverridesAgainstRelease(binding, release)...)
 
 	return warnings, allErrs
@@ -217,8 +255,8 @@ func (v *Validator) validateEnvOverridesAgainstSchema(binding *openchoreodevv1al
 		Schemas: []map[string]any{envOverridesSchema},
 	}
 
-	// Convert to JSON schema for validation
-	jsonSchema, err := schema.ToJSONSchema(schemaDef)
+	// Convert to structural (for defaulting) and JSON schema (for validation)
+	structural, jsonSchema, err := schema.ToStructuralAndJSONSchema(schemaDef)
 	if err != nil {
 		allErrs = append(allErrs, field.Invalid(
 			basePath,
@@ -227,17 +265,25 @@ func (v *Validator) validateEnvOverridesAgainstSchema(binding *openchoreodevv1al
 		return allErrs
 	}
 
-	// Unmarshal binding's envOverrides
+	// Unmarshal binding's envOverrides (treat nil/empty as empty object)
 	var envOverrides map[string]any
-	if err := yaml.Unmarshal(binding.Spec.ComponentTypeEnvOverrides.Raw, &envOverrides); err != nil {
-		allErrs = append(allErrs, field.Invalid(
-			basePath,
-			"<invalid>",
-			fmt.Sprintf("failed to parse envOverrides: %v", err)))
-		return allErrs
+	if binding.Spec.ComponentTypeEnvOverrides != nil && len(binding.Spec.ComponentTypeEnvOverrides.Raw) > 0 {
+		if err := yaml.Unmarshal(binding.Spec.ComponentTypeEnvOverrides.Raw, &envOverrides); err != nil {
+			allErrs = append(allErrs, field.Invalid(
+				basePath,
+				"<invalid>",
+				fmt.Sprintf("failed to parse envOverrides: %v", err)))
+			return allErrs
+		}
+	} else {
+		envOverrides = map[string]any{}
 	}
 
-	// Validate envOverrides against schema
+	// Apply defaults first to populate optional fields with defaults,
+	// then validate to catch missing required fields (those without defaults)
+	envOverrides = schema.ApplyDefaults(envOverrides, structural)
+
+	// Validate envOverrides against schema (will catch missing required fields)
 	if err := schema.ValidateWithJSONSchema(envOverrides, jsonSchema); err != nil {
 		allErrs = append(allErrs, field.Invalid(
 			basePath,
@@ -259,23 +305,21 @@ func (v *Validator) validateTraitOverridesAgainstRelease(binding *openchoreodevv
 		validInstanceNames[traitInstance.InstanceName] = traitInstance.Name
 	}
 
-	// Validate each trait override
-	for instanceName, override := range binding.Spec.TraitOverrides {
-		overridePath := basePath.Key(instanceName)
-
-		// Check if instance name exists in the release
-		traitName, exists := validInstanceNames[instanceName]
-		if !exists {
+	// Validate trait overrides that reference non-existent instances
+	for instanceName := range binding.Spec.TraitOverrides {
+		if _, exists := validInstanceNames[instanceName]; !exists {
 			allErrs = append(allErrs, field.NotFound(
-				overridePath,
+				basePath.Key(instanceName),
 				fmt.Sprintf("trait instance %q not found in ComponentRelease %q", instanceName, release.Name)))
-			continue
 		}
+	}
 
-		// If override has no content, skip validation
-		if len(override.Raw) == 0 {
-			continue
-		}
+	// Validate all trait instances that have envOverrides schema
+	// Uses empty object if no override is provided (catches missing required fields)
+	for _, traitInstance := range release.Spec.ComponentProfile.Traits {
+		instanceName := traitInstance.InstanceName
+		traitName := traitInstance.Name
+		overridePath := basePath.Key(instanceName)
 
 		// Get the trait spec from the release
 		traitSpec, exists := release.Spec.Traits[traitName]
@@ -287,7 +331,7 @@ func (v *Validator) validateTraitOverridesAgainstRelease(binding *openchoreodevv
 			continue
 		}
 
-		// If Trait has no envOverrides schema, nothing to validate against
+		// If Trait has no envOverrides schema, nothing to validate
 		if traitSpec.Schema.EnvOverrides == nil || len(traitSpec.Schema.EnvOverrides.Raw) == 0 {
 			continue
 		}
@@ -318,8 +362,8 @@ func (v *Validator) validateTraitOverridesAgainstRelease(binding *openchoreodevv
 			Schemas: []map[string]any{envOverridesSchema},
 		}
 
-		// Convert to JSON schema for validation
-		jsonSchema, err := schema.ToJSONSchema(schemaDef)
+		// Convert to structural (for defaulting) and JSON schema (for validation)
+		structural, jsonSchema, err := schema.ToStructuralAndJSONSchema(schemaDef)
 		if err != nil {
 			allErrs = append(allErrs, field.Invalid(
 				overridePath,
@@ -328,17 +372,25 @@ func (v *Validator) validateTraitOverridesAgainstRelease(binding *openchoreodevv
 			continue
 		}
 
-		// Unmarshal trait override
+		// Unmarshal trait override (treat nil/empty as empty object)
 		var traitOverride map[string]any
-		if err := yaml.Unmarshal(override.Raw, &traitOverride); err != nil {
-			allErrs = append(allErrs, field.Invalid(
-				overridePath,
-				"<invalid>",
-				fmt.Sprintf("failed to parse trait override: %v", err)))
-			continue
+		if override, exists := binding.Spec.TraitOverrides[instanceName]; exists && len(override.Raw) > 0 {
+			if err := yaml.Unmarshal(override.Raw, &traitOverride); err != nil {
+				allErrs = append(allErrs, field.Invalid(
+					overridePath,
+					"<invalid>",
+					fmt.Sprintf("failed to parse trait override: %v", err)))
+				continue
+			}
+		} else {
+			traitOverride = map[string]any{}
 		}
 
-		// Validate override against schema
+		// Apply defaults first to populate optional fields with defaults,
+		// then validate to catch missing required fields (those without defaults)
+		traitOverride = schema.ApplyDefaults(traitOverride, structural)
+
+		// Validate override against schema (will catch missing required fields)
 		if err := schema.ValidateWithJSONSchema(traitOverride, jsonSchema); err != nil {
 			allErrs = append(allErrs, field.Invalid(
 				overridePath,
