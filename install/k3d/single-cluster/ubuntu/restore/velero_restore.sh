@@ -161,6 +161,90 @@ validate_backup() {
     log_success "Backup validated"
 }
 
+# Start MinIO port-forwarding if needed
+start_minio_portforward() {
+    local minio_forward_port="30900"
+    
+    # Check if port-forward is already running
+    if lsof -Pi :${minio_forward_port} -sTCP:LISTEN >/dev/null 2>&1; then
+        log_info "MinIO port-forward already running on port ${minio_forward_port}"
+        return 0
+    fi
+    
+    # Check if MinIO service exists
+    if ! kubectl --context="${KUBE_CONTEXT}" get svc minio -n "${VELERO_NAMESPACE}" >/dev/null 2>&1; then
+        log_warning "MinIO service not found, skipping port-forward"
+        return 0
+    fi
+    
+    log_info "Starting MinIO port-forward to localhost:${minio_forward_port}..."
+    
+    # Start port-forward in background
+    kubectl --context="${KUBE_CONTEXT}" port-forward -n "${VELERO_NAMESPACE}" svc/minio ${minio_forward_port}:9000 >/dev/null 2>&1 &
+    local pf_pid=$!
+    
+    # Wait a moment and check if it's still running
+    sleep 2
+    if ! kill -0 $pf_pid 2>/dev/null; then
+        log_error "Port-forward failed to start"
+        return 1
+    fi
+    
+    # Save PID to file for later cleanup
+    echo $pf_pid > /tmp/velero-minio-portforward.pid
+    
+    log_success "MinIO port-forward started (PID: $pf_pid)"
+    
+    # Wait a bit for port-forward to be ready
+    sleep 1
+}
+
+# Fix MinIO publicUrl if needed
+fix_minio_publicurl() {
+    log_step "Checking MinIO publicUrl configuration..."
+    
+    # Check if MinIO service exists
+    if ! kubectl --context="${KUBE_CONTEXT}" get svc minio -n "${VELERO_NAMESPACE}" >/dev/null 2>&1; then
+        log_warning "MinIO service not found, skipping publicUrl fix"
+        return 0
+    fi
+    
+    # Ensure MinIO service is ClusterIP (not NodePort)
+    local svc_type=$(kubectl --context="${KUBE_CONTEXT}" get svc minio -n "${VELERO_NAMESPACE}" -o jsonpath='{.spec.type}' 2>/dev/null || echo "")
+    
+    if [ "$svc_type" = "NodePort" ]; then
+        log_info "Converting MinIO service to ClusterIP..."
+        kubectl --context="${KUBE_CONTEXT}" patch svc minio -n "${VELERO_NAMESPACE}" \
+            --type merge \
+            -p '{"spec":{"type":"ClusterIP"}}' || {
+            log_warning "Failed to update service type, continuing..."
+        }
+    fi
+    
+    # Check current publicUrl
+    local current_publicurl=$(kubectl --context="${KUBE_CONTEXT}" get backupstoragelocation default -n "${VELERO_NAMESPACE}" -o jsonpath='{.spec.config.publicUrl}' 2>/dev/null || echo "")
+    
+    # If publicUrl contains .svc (cluster DNS) or is not localhost:30900, we need to fix it
+    if echo "$current_publicurl" | grep -q "\.svc" || [ "$current_publicurl" != "http://localhost:30900" ]; then
+        log_info "Updating MinIO publicUrl to use localhost:30900..."
+        
+        local public_url="http://localhost:30900"
+        
+        # Update backup location publicUrl
+        kubectl --context="${KUBE_CONTEXT}" patch backupstoragelocation default \
+            -n "${VELERO_NAMESPACE}" \
+            --type merge \
+            -p "{\"spec\":{\"config\":{\"publicUrl\":\"${public_url}\"}}}" || {
+            log_warning "Failed to update publicUrl, but continuing..."
+            return 0
+        }
+        
+        log_success "MinIO publicUrl fixed to: ${public_url}"
+    else
+        log_info "MinIO publicUrl looks correct: ${current_publicurl}"
+    fi
+}
+
 # Import backup to cluster
 import_backup() {
     log_step "Importing backup to k3d node..."
@@ -307,6 +391,7 @@ create_restore() {
     local restore_args=(
         "restore" "create" "${RESTORE_NAME}"
         "--from-backup" "${BACKUP_NAME}"
+        "--force"
         "--kubecontext" "${KUBE_CONTEXT}"
     )
     
@@ -656,6 +741,8 @@ EOF
     
     # Execute restore
     validate_prerequisites
+    fix_minio_publicurl
+    start_minio_portforward
     import_backup
     validate_backup
     confirm_restore
