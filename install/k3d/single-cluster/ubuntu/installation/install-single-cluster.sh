@@ -993,20 +993,52 @@ EOF
     
     # Install components
     install_control_plane
-    install_data_plane
-    create_dataplane_resource
+
+    # Run installation functions in parallel
+    log_step "Installing components in parallel..."
+    
+    # Start all installation functions in background
+    local pids=()
+    
+    install_data_plane &
+    pids+=($!)
+    
+    create_dataplane_resource &
+    pids+=($!)
     
     if [[ "$INSTALL_BUILD_PLANE" == "true" ]]; then
-        install_build_plane
-        create_buildplane_resource
+        install_build_plane &
+        pids+=($!)
+        
+        create_buildplane_resource &
+        pids+=($!)
     fi
     
     if [[ "$INSTALL_OBSERVABILITY" == "true" ]]; then
-        install_observability_plane
+        install_observability_plane &
+        pids+=($!)
     fi
 
     # Install Keel for automatic deployment updates
-    install_keel
+    install_keel &
+    pids+=($!)
+    
+    # Wait for all background jobs to complete
+    log_info "Waiting for all parallel installations to complete..."
+    local failed_jobs=0
+    
+    for pid in "${pids[@]}"; do
+        if ! wait $pid; then
+            failed_jobs=$((failed_jobs + 1))
+        fi
+    done
+    
+    if [[ $failed_jobs -gt 0 ]]; then
+        log_error "$failed_jobs installation job(s) failed"
+        exit 1
+    fi
+    
+    log_success "All parallel installations completed successfully"
     
     # Verify installation
     verify_installation
