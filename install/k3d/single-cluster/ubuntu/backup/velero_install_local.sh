@@ -22,7 +22,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../../.." && pwd)"
 CLUSTER_NAME="${CLUSTER_NAME:-openchoreo}"
 KUBE_CONTEXT="k3d-${CLUSTER_NAME}"
 VELERO_NAMESPACE="${VELERO_NAMESPACE:-velero}"
-VELERO_VERSION="${VELERO_VERSION:-v1.12.1}"
+VELERO_VERSION="${VELERO_VERSION:-v1.17.1}"
 
 # Local storage configuration
 BACKUP_DIR="${BACKUP_DIR:-$(dirname "${REPO_ROOT}")/openchoreo-backups}"
