@@ -230,14 +230,14 @@ install_velero_local() {
     # This uses hostPath volumes instead of cloud object storage
     
     # Install Velero with local configuration
-    # Note: publicUrl will be updated after MinIO is deployed with NodePort
+    # Note: publicUrl will be updated after MinIO is deployed with Ingress
     velero install \
         --provider aws \
         --plugins velero/velero-plugin-for-aws:v1.8.0 \
         --bucket local \
         --use-node-agent \
         --use-volume-snapshots=false \
-        --backup-location-config region=default,s3ForcePathStyle=true,s3Url=http://minio.velero.svc:9000,publicUrl=http://localhost:30900 \
+        --backup-location-config region=default,s3ForcePathStyle=true,s3Url=http://minio.velero.svc:9000,publicUrl=http://minio.velero.localhost:8080 \
         --no-secret \
         --kubecontext "${KUBE_CONTEXT}"
     
@@ -324,6 +324,26 @@ spec:
   selector:
     app: minio
 ---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: minio
+  namespace: ${VELERO_NAMESPACE}
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  rules:
+  - host: minio.velero.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: minio
+            port:
+              number: 9000
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -359,16 +379,15 @@ EOF
         log_warning "MinIO setup job may still be running"
     }
     
-    # For k3d, we need to use port-forwarding to access MinIO from outside
-    # Use a fixed port for port-forwarding (30900)
-    local minio_forward_port="30900"
+    # Create Ingress for MinIO (already included in the YAML above)
+    log_info "Ingress created for MinIO"
     
     # Update Velero backup location with credentials and publicUrl
     log_info "Configuring Velero backup location..."
     
-    # For k3d, publicUrl should use localhost with port-forward port
+    # For k3d, publicUrl should use the ingress host with port 8080 (Traefik)
     # The internal s3Url stays as cluster DNS, but publicUrl needs to be accessible from CLI
-    local public_url="http://localhost:${minio_forward_port}"
+    local public_url="http://minio.velero.localhost:8080"
     
     kubectl --context="${KUBE_CONTEXT}" patch backupstoragelocation default \
         -n "${VELERO_NAMESPACE}" \
@@ -376,10 +395,7 @@ EOF
         -p "{\"spec\":{\"credential\":{\"name\":\"minio-credentials\",\"key\":\"cloud\"},\"config\":{\"publicUrl\":\"${public_url}\"}}}"
     
     log_success "MinIO deployed and configured"
-    log_warning "IMPORTANT: MinIO requires port-forwarding for Velero CLI access"
-    log_info "Start port-forwarding with:"
-    log_info "  kubectl --context=${KUBE_CONTEXT} port-forward -n ${VELERO_NAMESPACE} svc/minio ${minio_forward_port}:9000"
-    log_info "Or run: ./start-minio-port-forward.sh"
+    log_info "MinIO accessible via Ingress at: ${public_url}"
 }
 
 # Verify Velero installation
@@ -413,46 +429,6 @@ verify_installation() {
     log_success "Velero installation verified"
 }
 
-# Start MinIO port-forwarding
-start_minio_portforward() {
-    log_step "Starting MinIO port-forwarding..."
-    
-    local minio_forward_port="30900"
-    
-    # Check if port-forward is already running
-    if lsof -Pi :${minio_forward_port} -sTCP:LISTEN >/dev/null 2>&1; then
-        log_info "Port-forward already running on port ${minio_forward_port}"
-        return 0
-    fi
-    
-    # Check if MinIO service exists
-    if ! kubectl --context="${KUBE_CONTEXT}" get svc minio -n "${VELERO_NAMESPACE}" >/dev/null 2>&1; then
-        log_error "MinIO service not found"
-        return 1
-    fi
-    
-    log_info "Starting port-forward in background..."
-    log_info "Port-forwarding MinIO from cluster to localhost:${minio_forward_port}"
-    
-    # Start port-forward in background
-    kubectl --context="${KUBE_CONTEXT}" port-forward -n "${VELERO_NAMESPACE}" svc/minio ${minio_forward_port}:9000 >/dev/null 2>&1 &
-    local pf_pid=$!
-    
-    # Wait a moment and check if it's still running
-    sleep 2
-    if ! kill -0 $pf_pid 2>/dev/null; then
-        log_error "Port-forward failed to start"
-        return 1
-    fi
-    
-    # Save PID to file for later cleanup
-    echo $pf_pid > /tmp/velero-minio-portforward.pid
-    
-    log_success "MinIO port-forward started (PID: $pf_pid)"
-    log_info "MinIO accessible at: http://localhost:${minio_forward_port}"
-    log_info "To stop port-forward: kill $pf_pid or pkill -f 'port-forward.*minio'"
-}
-
 # Fix MinIO publicUrl for existing installations
 fix_minio_publicurl() {
     log_step "Fixing MinIO publicUrl configuration..."
@@ -475,9 +451,8 @@ fix_minio_publicurl() {
         }
     fi
     
-    # Use port-forward port for publicUrl
-    local minio_forward_port="30900"
-    local public_url="http://localhost:${minio_forward_port}"
+    # Use ingress host for publicUrl
+    local public_url="http://minio.velero.localhost:8080"
     
     # Update backup location publicUrl
     log_info "Updating backup location publicUrl to: ${public_url}"
@@ -490,9 +465,7 @@ fix_minio_publicurl() {
         return 0
     }
     
-    log_success "MinIO publicUrl fixed"
-    log_warning "IMPORTANT: Start port-forwarding before using Velero CLI:"
-    log_info "  kubectl --context=${KUBE_CONTEXT} port-forward -n ${VELERO_NAMESPACE} svc/minio ${minio_forward_port}:9000"
+    log_success "MinIO publicUrl fixed to: ${public_url}"
 }
 
 # Create initial backup schedule
@@ -537,8 +510,7 @@ Uses local filesystem storage - no cloud credentials needed.
 Options:
   --backup-dir DIR             Local backup directory [default: ../openchoreo-backups]
   --cluster-name NAME          Cluster name [default: openchoreo]
-  --fix-publicurl              Fix MinIO publicUrl for existing installation
-  --start-portforward          Start MinIO port-forwarding in background
+  --fix-publicurl              Fix MinIO publicUrl and create Ingress for existing installation
   --help, -h                   Show this help message
 
 Environment Variables:
@@ -555,11 +527,8 @@ Examples:
   # Install for different cluster
   $0 --cluster-name my-cluster
   
-  # Fix MinIO publicUrl for existing installation
+  # Fix MinIO publicUrl and create Ingress for existing installation
   $0 --fix-publicurl
-  
-  # Start MinIO port-forwarding
-  $0 --start-portforward
 
 EOF
 }
@@ -567,7 +536,6 @@ EOF
 # Parse command line arguments
 parse_args() {
     FIX_PUBLICURL_ONLY=false
-    START_PORTFORWARD_ONLY=false
     
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -582,10 +550,6 @@ parse_args() {
                 ;;
             --fix-publicurl)
                 FIX_PUBLICURL_ONLY=true
-                shift
-                ;;
-            --start-portforward)
-                START_PORTFORWARD_ONLY=true
                 shift
                 ;;
             --help|-h)
@@ -624,13 +588,6 @@ EOF
         exit 0
     fi
     
-    # If only starting port-forward, do that and exit
-    if [ "$START_PORTFORWARD_ONLY" = "true" ]; then
-        validate_prerequisites
-        start_minio_portforward
-        exit 0
-    fi
-    
     # Display configuration
     log_info "Configuration:"
     log_info "  Cluster: ${CLUSTER_NAME} (${KUBE_CONTEXT})"
@@ -646,13 +603,6 @@ EOF
     verify_installation
     create_backup_schedule
     
-    # Start MinIO port-forwarding for CLI access
-    log_step "Setting up MinIO port-forwarding..."
-    start_minio_portforward || {
-        log_warning "Port-forwarding setup failed, but installation is complete"
-        log_info "You can start it manually with: $0 --start-portforward"
-    }
-    
     # Show next steps
     log_step "Installation Complete!"
     
@@ -660,6 +610,7 @@ EOF
     
     echo -e "${CYAN}Backup Location:${RESET} ${BACKUP_DIR}"
     echo -e "${CYAN}Storage Type:${RESET} Local MinIO (S3-compatible)"
+    echo -e "${CYAN}MinIO Access:${RESET} http://minio.velero.localhost:8080 (via Ingress)"
     
     echo -e "\n${CYAN}Next Steps:${RESET}"
     echo -e "  1. Create a backup:      ${YELLOW}../backup/velero_backup.sh${RESET}"
@@ -669,6 +620,7 @@ EOF
     
     echo -e "\n${CYAN}Important Notes:${RESET}"
     echo -e "  • Backups are stored locally in: ${BACKUP_DIR}"
+    echo -e "  • MinIO is accessible via Ingress at: http://minio.velero.localhost:8080"
     echo -e "  • For VM backups, backup this directory externally"
     echo -e "  • For production, consider cloud storage (use velero_install.sh)"
     
