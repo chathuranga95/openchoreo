@@ -30,6 +30,9 @@ if [ -z "${BACKUP_ROOT}" ]; then
     BACKUP_ROOT="$(dirname "${REPO_ROOT}")/openchoreo-backups"
 fi
 
+# Repository password for node-agent (must match the one used during backup)
+REPO_PASSWORD="${REPO_PASSWORD:-static-passw0rd}"
+
 # Restore options
 RESTORE_VOLUMES="${RESTORE_VOLUMES:-true}"
 WAIT_FOR_COMPLETION="${WAIT_FOR_COMPLETION:-true}"
@@ -63,6 +66,89 @@ log_step() {
 # Check if command exists
 command_exists() {
     command -v "$1" >/dev/null 2>&1
+}
+
+# Load repository password from saved file
+load_repo_password() {
+    local password_file="${BACKUP_ROOT}/.velero-repo-password"
+    
+    if [ -z "$REPO_PASSWORD" ]; then
+        if [ -f "$password_file" ]; then
+            REPO_PASSWORD=$(cat "$password_file")
+            log_info "Loaded repository password from: ${password_file}"
+        else
+            log_error "Repository password not found!"
+            log_error "Expected location: ${password_file}"
+            log_info ""
+            log_info "The repository password is needed to decrypt volume backups."
+            log_info "You can set it via environment variable:"
+            log_info "  export REPO_PASSWORD='your-password-here'"
+            log_info ""
+            log_info "If you don't know the password, check the backup source system."
+            exit 1
+        fi
+    else
+        log_info "Using repository password from environment variable"
+    fi
+}
+
+# Check repository password matches
+check_repo_password() {
+    log_step "Checking repository password..."
+    
+    # Get the repository password secret from the cluster
+    local cluster_password=$(kubectl --context="${KUBE_CONTEXT}" get secret \
+        -n "${VELERO_NAMESPACE}" velero-repo-credentials \
+        -o jsonpath='{.data.repository-password}' 2>/dev/null | base64 -d)
+    
+    if [ -z "$cluster_password" ]; then
+        log_warning "Repository password secret not found in cluster"
+        log_info "This might be a fresh Velero installation - will set the correct password"
+        return 1
+    fi
+    
+    if [ "$cluster_password" != "$REPO_PASSWORD" ]; then
+        log_error "Repository password mismatch!"
+        log_error "The cluster has a different repository password than the backup"
+        log_info ""
+        log_info "To fix this, you need to:"
+        log_info "  1. Uninstall Velero: velero uninstall --force"
+        log_info "  2. Set correct password: export REPO_PASSWORD='<correct-password>'"
+        log_info "  3. Reinstall Velero: cd ../backup && ./velero_install_local.sh"
+        log_info "  4. Run restore again"
+        exit 1
+    fi
+    
+    log_success "Repository password matches"
+    return 0
+}
+
+# Ensure repository password is set in cluster
+ensure_repo_password() {
+    if ! check_repo_password; then
+        log_info "Setting repository password in cluster..."
+        
+        # Create/update the repository password secret
+        kubectl --context="${KUBE_CONTEXT}" create secret generic velero-repo-credentials \
+            -n "${VELERO_NAMESPACE}" \
+            --from-literal=repository-password="$REPO_PASSWORD" \
+            --dry-run=client -o yaml | \
+            kubectl --context="${KUBE_CONTEXT}" apply -f -
+        
+        # Restart node-agent pods to pick up the new password
+        log_info "Restarting node-agent pods..."
+        kubectl --context="${KUBE_CONTEXT}" delete pods \
+            -n "${VELERO_NAMESPACE}" -l name=node-agent 2>/dev/null || true
+        
+        # Wait for node-agent to be ready again
+        sleep 10
+        kubectl --context="${KUBE_CONTEXT}" wait --for=condition=Ready pods \
+            -n "${VELERO_NAMESPACE}" -l name=node-agent --timeout=120s || {
+            log_warning "Node-agent pods may not be ready yet"
+        }
+        
+        log_success "Repository password configured"
+    fi
 }
 
 # Velero uses --kubecontext flag (not --context)
@@ -265,9 +351,61 @@ confirm_restore() {
     fi
 }
 
+# Check node-agent health
+check_node_agent_health() {
+    log_step "Checking node-agent health..."
+    
+    local node_agent_pods=$(kubectl --context="${KUBE_CONTEXT}" get pods \
+        -n "${VELERO_NAMESPACE}" -l name=node-agent \
+        -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
+    
+    if [ -z "$node_agent_pods" ]; then
+        log_error "No node-agent pods found!"
+        log_info "Node-agent is required for pod volume restores"
+        log_info "Please ensure Velero is properly installed with --use-node-agent"
+        return 1
+    fi
+    
+    log_info "Found node-agent pods: ${node_agent_pods}"
+    
+    # Check if node-agent pods are ready
+    local ready_count=$(kubectl --context="${KUBE_CONTEXT}" get pods \
+        -n "${VELERO_NAMESPACE}" -l name=node-agent \
+        --field-selector=status.phase=Running \
+        -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | \
+        grep -o "True" | wc -l)
+    
+    local total_count=$(echo "$node_agent_pods" | wc -w)
+    
+    if [ "$ready_count" -lt "$total_count" ]; then
+        log_warning "Some node-agent pods are not ready (${ready_count}/${total_count})"
+        log_info "Waiting for node-agent pods to be ready..."
+        
+        kubectl --context="${KUBE_CONTEXT}" wait --for=condition=Ready pods \
+            -n "${VELERO_NAMESPACE}" -l name=node-agent --timeout=120s || {
+            log_error "Node-agent pods failed to become ready"
+            log_info "Check node-agent logs:"
+            log_info "  kubectl --context=${KUBE_CONTEXT} logs -n ${VELERO_NAMESPACE} -l name=node-agent --tail=50"
+            return 1
+        }
+    fi
+    
+    log_success "Node-agent pods are healthy"
+    return 0
+}
+
 # Pre-restore checks
 pre_restore_checks() {
     log_step "Pre-restore checks..."
+    
+    # Check node-agent health if restoring volumes
+    if [ "$RESTORE_VOLUMES" = "true" ]; then
+        if ! check_node_agent_health; then
+            log_error "Node-agent health check failed"
+            log_info "Pod volume restores require healthy node-agent pods"
+            exit 1
+        fi
+    fi
     
     # Check if there are existing resources that might conflict
     log_info "Checking for existing resources..."
@@ -292,6 +430,72 @@ pre_restore_checks() {
         fi
     else
         log_success "No existing resources found - clean slate"
+    fi
+}
+
+# Fix pod volume restore errors by retrying failed PVRs
+fix_pod_volume_restore_errors() {
+    log_step "Attempting to fix pod volume restore errors..."
+    
+    # Get all failed PVRs for this restore
+    local failed_pvrs=$(kubectl --context="${KUBE_CONTEXT}" get pvr \
+        -n "${VELERO_NAMESPACE}" -l velero.io/restore-name="${RESTORE_NAME}" \
+        --field-selector=status.phase=Failed -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
+    
+    if [ -z "$failed_pvrs" ]; then
+        log_info "No failed pod volume restores found"
+        return 0
+    fi
+    
+    log_warning "Found failed pod volume restores: ${failed_pvrs}"
+    log_info "Deleting failed PVRs to allow Velero to retry..."
+    
+    local retry_count=0
+    local max_retries=2
+    
+    for pvr in $failed_pvrs; do
+        log_info "Deleting failed PVR: ${pvr}"
+        kubectl --context="${KUBE_CONTEXT}" delete pvr "${pvr}" \
+            -n "${VELERO_NAMESPACE}" --wait=false 2>/dev/null || true
+        
+        # Get the pod name from PVR to check if pod exists
+        local pod_name=$(kubectl --context="${KUBE_CONTEXT}" get pvr "${pvr}" \
+            -n "${VELERO_NAMESPACE}" -o jsonpath='{.spec.pod.name}' 2>/dev/null || echo "")
+        
+        if [ -n "$pod_name" ]; then
+            local pod_namespace=$(kubectl --context="${KUBE_CONTEXT}" get pvr "${pvr}" \
+                -n "${VELERO_NAMESPACE}" -o jsonpath='{.spec.pod.namespace}' 2>/dev/null || echo "")
+            
+            if [ -n "$pod_namespace" ]; then
+                log_info "Checking if pod ${pod_namespace}/${pod_name} is ready..."
+                
+                # Wait for pod to be ready (if it exists)
+                if kubectl --context="${KUBE_CONTEXT}" get pod "${pod_name}" \
+                    -n "${pod_namespace}" >/dev/null 2>&1; then
+                    log_info "Waiting for pod ${pod_namespace}/${pod_name} to be ready..."
+                    kubectl --context="${KUBE_CONTEXT}" wait --for=condition=Ready \
+                        pod/"${pod_name}" -n "${pod_namespace}" --timeout=60s 2>/dev/null || {
+                        log_warning "Pod ${pod_namespace}/${pod_name} may not be ready yet"
+                    }
+                fi
+            fi
+        fi
+    done
+    
+    log_info "Waiting for Velero to retry pod volume restores..."
+    sleep 15
+    
+    # Check if PVRs are being retried
+    local new_pvrs=$(kubectl --context="${KUBE_CONTEXT}" get pvr \
+        -n "${VELERO_NAMESPACE}" -l velero.io/restore-name="${RESTORE_NAME}" \
+        --field-selector=status.phase=InProgress -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
+    
+    if [ -n "$new_pvrs" ]; then
+        log_success "Pod volume restores are being retried"
+        return 0
+    else
+        log_warning "No new pod volume restores detected"
+        return 1
     fi
 }
 
@@ -342,10 +546,56 @@ create_restore() {
     
     if velero "${restore_args[@]}"; then
         log_success "Restore started successfully"
+        
+        # If restoring volumes, wait a bit for pods to be created before volume restore starts
+        if [ "$RESTORE_VOLUMES" = "true" ]; then
+            log_info "Waiting for pods to be created before volume restore starts..."
+            sleep 10
+        fi
     else
         log_error "Failed to create restore"
         return 1
     fi
+}
+
+# Check for pod volume restore errors
+check_pod_volume_restore_errors() {
+    log_info "Checking for pod volume restore errors..."
+    
+    # Get restore logs and check for common errors
+    local restore_logs=$(velero restore logs "${RESTORE_NAME}" --kubecontext="${KUBE_CONTEXT}" 2>/dev/null)
+    
+    if echo "$restore_logs" | grep -q "no such file or directory"; then
+        log_warning "Detected 'no such file or directory' errors in restore logs"
+        log_info "This usually means parent directories don't exist when restoring files"
+        log_info "This can happen if pods are restored before volumes are ready"
+        
+        # Check if there are failed PVRs (Pod Volume Restores)
+        local failed_pvrs=$(kubectl --context="${KUBE_CONTEXT}" get pvr \
+            -n "${VELERO_NAMESPACE}" -l velero.io/restore-name="${RESTORE_NAME}" \
+            --field-selector=status.phase=Failed -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
+        
+        if [ -n "$failed_pvrs" ]; then
+            log_warning "Found failed Pod Volume Restores: ${failed_pvrs}"
+            log_info "Attempting to retry failed PVRs..."
+            
+            # Delete failed PVRs to allow retry
+            for pvr in $failed_pvrs; do
+                log_info "Deleting failed PVR: ${pvr}"
+                kubectl --context="${KUBE_CONTEXT}" delete pvr "${pvr}" \
+                    -n "${VELERO_NAMESPACE}" --wait=false 2>/dev/null || true
+            done
+            
+            # Wait a bit for Velero to retry
+            sleep 10
+            
+            return 1  # Indicate retry needed
+        fi
+        
+        return 1
+    fi
+    
+    return 0
 }
 
 # Wait for restore to complete
@@ -359,6 +609,8 @@ wait_for_restore() {
     local max_wait=3600  # 1 hour
     local elapsed=0
     local interval=10
+    local retry_count=0
+    local max_retries=3
     
     while [ $elapsed -lt $max_wait ]; do
         local status=$(velero restore describe "${RESTORE_NAME}" --kubecontext="${KUBE_CONTEXT}" 2>/dev/null | \
@@ -370,11 +622,32 @@ wait_for_restore() {
                 return 0
                 ;;
             FAILED|PARTIALLYFAILED)
+                # Check for pod volume restore errors that might be retryable
+                if [ "$RESTORE_VOLUMES" = "true" ] && [ $retry_count -lt $max_retries ]; then
+                    if check_pod_volume_restore_errors; then
+                        log_info "Retrying failed pod volume restores (attempt $((retry_count + 1))/${max_retries})..."
+                        if fix_pod_volume_restore_errors; then
+                            retry_count=$((retry_count + 1))
+                            sleep 30  # Wait before checking again
+                            continue
+                        fi
+                    fi
+                fi
+                
                 log_error "Restore failed or partially failed"
+                log_info "Restore status:"
+                velero restore describe "${RESTORE_NAME}" --kubecontext="${KUBE_CONTEXT}" | head -30
+                log_info ""
+                log_info "Restore logs (errors only):"
+                velero restore logs "${RESTORE_NAME}" --kubecontext="${KUBE_CONTEXT}" 2>/dev/null | grep -i error | tail -20 || true
                 return 1
                 ;;
             INPROGRESS|NEW)
                 log_info "Restore in progress... (${elapsed}s elapsed)"
+                # Periodically check for pod volume restore errors
+                if [ "$RESTORE_VOLUMES" = "true" ] && [ $((elapsed % 60)) -eq 0 ] && [ $elapsed -gt 0 ]; then
+                    check_pod_volume_restore_errors || true
+                fi
                 ;;
             *)
                 log_warning "Unknown restore status: ${status}"
@@ -386,6 +659,8 @@ wait_for_restore() {
     done
     
     log_error "Restore timed out after ${max_wait} seconds"
+    log_info "Final restore status:"
+    velero restore describe "${RESTORE_NAME}" --kubecontext="${KUBE_CONTEXT}" | head -30
     return 1
 }
 
@@ -437,7 +712,47 @@ verify_restore() {
     else
         log_error "Restore did not complete successfully"
         log_info "Phase: ${phase_line}"
-        velero restore logs "${RESTORE_NAME}" --kubecontext="${KUBE_CONTEXT}" 2>/dev/null | grep -i error || true
+        
+        # Check for pod volume restore errors specifically
+        if [ "$RESTORE_VOLUMES" = "true" ]; then
+            log_info "Checking pod volume restore status..."
+            local pvr_status=$(kubectl --context="${KUBE_CONTEXT}" get pvr \
+                -n "${VELERO_NAMESPACE}" -l velero.io/restore-name="${RESTORE_NAME}" \
+                -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.status.phase}{"\n"}{end}' 2>/dev/null)
+            
+            if [ -n "$pvr_status" ]; then
+                log_info "Pod Volume Restore status:"
+                echo "$pvr_status" | while read -r line; do
+                    if echo "$line" | grep -q "Failed"; then
+                        log_warning "  $line"
+                    else
+                        log_info "  $line"
+                    fi
+                done
+            fi
+        fi
+        
+        log_info "Restore logs (errors only):"
+        velero restore logs "${RESTORE_NAME}" --kubecontext="${KUBE_CONTEXT}" 2>/dev/null | grep -i error | tail -20 || true
+        
+        # Show troubleshooting tips
+        log_info ""
+        log_info "${YELLOW}Troubleshooting tips:${RESET}"
+        log_info "1. Check node-agent logs:"
+        log_info "   kubectl --context=${KUBE_CONTEXT} logs -n ${VELERO_NAMESPACE} -l name=node-agent --tail=100"
+        log_info ""
+        log_info "2. Check Velero server logs:"
+        log_info "   kubectl --context=${KUBE_CONTEXT} logs -n ${VELERO_NAMESPACE} deployment/velero --tail=100"
+        log_info ""
+        log_info "3. If pod volume restore failed with 'no such file or directory':"
+        log_info "   - This usually means directories don't exist when restoring files"
+        log_info "   - Try deleting failed PVRs and retrying:"
+        log_info "     kubectl --context=${KUBE_CONTEXT} delete pvr -n ${VELERO_NAMESPACE} -l velero.io/restore-name=${RESTORE_NAME} --field-selector=status.phase=Failed"
+        log_info "   - Then wait for Velero to retry automatically"
+        log_info ""
+        log_info "4. If issues persist, try restoring without volumes first:"
+        log_info "   $0 --backup ${BACKUP_NAME} --no-volumes"
+        
         return 1
     fi
     
@@ -448,6 +763,21 @@ verify_restore() {
     if [ -n "$warnings" ] && [ "$warnings" != "0" ]; then
         log_warning "Restore completed with ${warnings} warnings"
         log_info "View warnings: velero restore logs ${RESTORE_NAME}"
+    fi
+    
+    # Check pod volume restore status if volumes were restored
+    if [ "$RESTORE_VOLUMES" = "true" ]; then
+        log_info "Checking pod volume restore status..."
+        local failed_pvrs=$(kubectl --context="${KUBE_CONTEXT}" get pvr \
+            -n "${VELERO_NAMESPACE}" -l velero.io/restore-name="${RESTORE_NAME}" \
+            --field-selector=status.phase=Failed -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
+        
+        if [ -n "$failed_pvrs" ]; then
+            log_warning "Some pod volume restores failed: ${failed_pvrs}"
+            log_info "You may need to manually retry these PVRs or restore without volumes"
+        else
+            log_success "All pod volume restores completed successfully"
+        fi
     fi
     
     # Verify critical resources
@@ -536,7 +866,11 @@ Restore OpenChoreo from a Velero backup.
 
 IMPORTANT: Run this AFTER a fresh OpenChoreo installation:
   1. Install fresh cluster: cd ../installation && ./install-single-cluster.sh
-  2. Run this restore script: $0 --backup <backup-name>
+  2. Install Velero with SAME repo password: cd ../backup && REPO_PASSWORD='<password>' ./velero_install_local.sh
+  3. Run this restore script: $0 --backup <backup-name>
+  
+NOTE: The repository password is critical for decrypting volume backups.
+      It will be auto-loaded from ${BACKUP_ROOT}/.velero-repo-password
 
 Options:
   --backup NAME                Backup name to restore from (required)
@@ -556,6 +890,8 @@ Environment Variables:
   RESTORE_NAME                 Custom restore name
   BACKUP_ROOT                  Backup root directory [default: <repo-parent>/openchoreo-backups]
                                Example: export BACKUP_ROOT=/home/user/openchoreo-backups
+  REPO_PASSWORD                Repository password (auto-loaded from .velero-repo-password)
+                               CRITICAL: Must match the password used during backup!
 
 Examples:
   # List available backups
@@ -573,6 +909,34 @@ Examples:
   # Restore to test environment (different namespaces)
   $0 --backup openchoreo-20241201-120000 \\
      --namespace-mappings "openchoreo-control-plane:test-control-plane"
+
+Troubleshooting:
+
+Pod Volume Restore Errors ("no such file or directory"):
+  This error occurs when Velero tries to restore files before directories exist.
+  The script automatically retries failed pod volume restores, but if issues persist:
+  
+  1. Check node-agent health:
+     kubectl --context=k3d-openchoreo get pods -n velero -l name=node-agent
+     kubectl --context=k3d-openchoreo logs -n velero -l name=node-agent --tail=100
+  
+  2. Manually retry failed PVRs:
+     kubectl --context=k3d-openchoreo delete pvr -n velero \\
+       -l velero.io/restore-name=<restore-name> \\
+       --field-selector=status.phase=Failed
+     # Velero will automatically retry
+  
+  3. If volumes aren't critical, restore without them:
+     $0 --backup <backup-name> --no-volumes
+  
+  4. Check Velero server logs:
+     kubectl --context=k3d-openchoreo logs -n velero deployment/velero --tail=100
+
+Repository Password Mismatch:
+  If restore fails with password errors:
+  1. Verify password matches backup: cat ${BACKUP_ROOT}/.velero-repo-password
+  2. Set password: export REPO_PASSWORD='<correct-password>'
+  3. Reinstall Velero: cd ../backup && ./velero_install_local.sh
 
 EOF
 }
@@ -646,6 +1010,7 @@ EOF
     # Display configuration
     log_info "Restore Configuration:"
     log_info "  Backup: ${BACKUP_NAME:-<not specified>}"
+    log_info "  Backup Root: ${BACKUP_ROOT}"
     log_info "  Restore Name: ${RESTORE_NAME:-<auto-generated>}"
     log_info "  Cluster: ${CLUSTER_NAME} (${KUBE_CONTEXT})"
     log_info "  Restore Volumes: ${RESTORE_VOLUMES}"
@@ -657,6 +1022,8 @@ EOF
     
     # Execute restore
     validate_prerequisites
+    load_repo_password
+    ensure_repo_password
     import_backup
     validate_backup
     confirm_restore

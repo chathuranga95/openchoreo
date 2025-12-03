@@ -25,7 +25,11 @@ VELERO_NAMESPACE="${VELERO_NAMESPACE:-velero}"
 VELERO_VERSION="${VELERO_VERSION:-v1.17.1}"
 
 # Local storage configuration
-BACKUP_DIR="${BACKUP_DIR:-$(dirname "${REPO_ROOT}")/openchoreo-backups}"
+BACKUP_DIR="$(dirname "${REPO_ROOT}")/openchoreo-backups"
+
+# Repository password for node-agent (Kopia/Restic)
+# IMPORTANT: This must be the same across all clusters for backup/restore to work
+REPO_PASSWORD="${REPO_PASSWORD:-static-passw0rd}"
 
 # Logging functions
 log_info() {
@@ -158,6 +162,60 @@ create_backup_directory() {
     log_success "Backup directory ready: $BACKUP_DIR"
 }
 
+# Create repository password file for reference
+create_repo_password_file() {
+    log_step "Setting up repository password for node-agent..."
+    
+    # Ensure backup directory exists first
+    if [ ! -d "$BACKUP_DIR" ]; then
+        mkdir -p "$BACKUP_DIR"
+    fi
+    
+    # Save password to backup directory for future reference
+    local password_file="${BACKUP_DIR}/.velero-repo-password"
+    echo -n "$REPO_PASSWORD" > "$password_file"
+    chmod 600 "$password_file"
+    log_info "Repository password saved to: ${password_file}"
+}
+
+# Verify repository password secret exists in cluster
+verify_repo_password_secret() {
+    log_step "Verifying repository password secret in cluster..."
+    
+    # Wait a bit for Velero to create the secret
+    sleep 5
+    
+    # Check if the secret exists
+    local secret_exists=$(kubectl --context="${KUBE_CONTEXT}" get secret \
+        -n "${VELERO_NAMESPACE}" velero-repo-credentials \
+        -o jsonpath='{.data.repository-password}' 2>/dev/null)
+    
+    if [ -z "$secret_exists" ]; then
+        log_warning "Repository password secret not found, creating it..."
+        
+        # Create the secret manually if Velero didn't create it
+        kubectl --context="${KUBE_CONTEXT}" create secret generic velero-repo-credentials \
+            -n "${VELERO_NAMESPACE}" \
+            --from-literal=repository-password="$REPO_PASSWORD" \
+            --dry-run=client -o yaml | \
+            kubectl --context="${KUBE_CONTEXT}" apply -f -
+        
+        log_success "Repository password secret created"
+    else
+        # Verify the password matches
+        local cluster_password=$(echo "$secret_exists" | base64 -d)
+        if [ "$cluster_password" != "$REPO_PASSWORD" ]; then
+            log_error "Repository password mismatch in cluster secret!"
+            log_error "Expected: ${REPO_PASSWORD}"
+            log_error "Found in cluster: ${cluster_password}"
+            log_error "This will cause restore failures!"
+            return 1
+        else
+            log_success "Repository password secret verified and matches"
+        fi
+    fi
+}
+
 # Create PersistentVolume for backups
 create_backup_pv() {
     log_step "Creating PersistentVolume for backups..."
@@ -229,8 +287,12 @@ install_velero_local() {
     # We'll use a custom configuration for local storage
     # This uses hostPath volumes instead of cloud object storage
     
+    # Save repository password to backup directory for future reference
+    create_repo_password_file > /dev/null
+    
     # Install Velero with local configuration
-    velero install \
+    log_info "Installing Velero..."
+    if ! velero install \
         --provider aws \
         --plugins velero/velero-plugin-for-aws:v1.8.0 \
         --bucket local \
@@ -238,7 +300,10 @@ install_velero_local() {
         --use-volume-snapshots=false \
         --backup-location-config region=default,s3ForcePathStyle=true,s3Url=http://minio.velero.svc:9000 \
         --no-secret \
-        --kubecontext "${KUBE_CONTEXT}"
+        --kubecontext "${KUBE_CONTEXT}"; then
+        log_error "Velero installation failed"
+        return 1
+    fi
     
     # Wait a bit for Velero to start
     sleep 5
@@ -251,6 +316,24 @@ install_velero_local() {
     kubectl --context="${KUBE_CONTEXT}" wait --for=condition=Available \
         deployment/velero -n "${VELERO_NAMESPACE}" --timeout=300s || {
         log_warning "Velero may not be fully ready yet, continuing..."
+    }
+    
+    # Create/verify repository password secret (required for node-agent)
+    log_info "Configuring repository password secret..."
+    verify_repo_password_secret || {
+        log_warning "Repository password secret verification failed, but continuing..."
+    }
+    
+    # Restart node-agent pods to pick up the repository password
+    log_info "Restarting node-agent pods to apply repository password..."
+    kubectl --context="${KUBE_CONTEXT}" delete pods \
+        -n "${VELERO_NAMESPACE}" -l name=node-agent 2>/dev/null || true
+    
+    # Wait for node-agent to be ready again
+    sleep 5
+    kubectl --context="${KUBE_CONTEXT}" wait --for=condition=Ready pods \
+        -n "${VELERO_NAMESPACE}" -l name=node-agent --timeout=120s 2>/dev/null || {
+        log_warning "Node-agent pods may not be ready yet"
     }
     
     log_success "Velero installed"
@@ -448,6 +531,9 @@ Options:
 Environment Variables:
   BACKUP_DIR                   Local backup directory
   CLUSTER_NAME                 Cluster name
+  REPO_PASSWORD                Repository password for node-agent encryption
+                               [default: static-passw0rd]
+                               IMPORTANT: Must be the same for backup and restore!
 
 Examples:
   # Install with defaults (backups to ../openchoreo-backups)
@@ -509,6 +595,11 @@ EOF
     log_info "  Cluster: ${CLUSTER_NAME} (${KUBE_CONTEXT})"
     log_info "  Backup Directory: ${BACKUP_DIR}"
     log_info "  Storage: Local filesystem (via MinIO)"
+    log_info "  Repository Password: ${REPO_PASSWORD}"
+    echo ""
+    
+    # Note: Password file will be saved during installation
+    log_info "Repository password will be saved to: ${BACKUP_DIR}/.velero-repo-password"
     echo ""
     
     # Execute installation
@@ -535,6 +626,11 @@ EOF
     
     echo -e "\n${CYAN}Important Notes:${RESET}"
     echo -e "  • Backups are stored locally in: ${BACKUP_DIR}"
+    echo -e "  • Repository password is set to: ${YELLOW}${REPO_PASSWORD}${RESET}"
+    echo -e "  • Password saved to: ${BACKUP_DIR}/.velero-repo-password"
+    echo -e "  • ${RED}IMPORTANT:${RESET} When restoring, use the SAME repository password!"
+    echo -e "  • Password is auto-loaded from: ${BACKUP_DIR}/.velero-repo-password"
+    echo -e "  • Or set manually: ${YELLOW}export REPO_PASSWORD='${REPO_PASSWORD}'${RESET}"
     echo -e "  • For VM backups, backup this directory externally"
     echo -e "  • For production, consider cloud storage (use velero_install.sh)"
     
