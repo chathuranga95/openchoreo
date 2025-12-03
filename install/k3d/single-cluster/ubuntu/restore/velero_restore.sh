@@ -161,46 +161,6 @@ validate_backup() {
     log_success "Backup validated"
 }
 
-# Verify MinIO publicUrl configuration
-verify_minio_publicurl() {
-    log_step "Verifying MinIO publicUrl configuration..."
-    
-    # Check if MinIO service exists
-    if ! kubectl --context="${KUBE_CONTEXT}" get svc minio -n "${VELERO_NAMESPACE}" >/dev/null 2>&1; then
-        log_warning "MinIO service not found, skipping publicUrl verification"
-        return 0
-    fi
-    
-    # Check if Ingress exists (should already exist from installation)
-    if ! kubectl --context="${KUBE_CONTEXT}" get ingress minio -n "${VELERO_NAMESPACE}" >/dev/null 2>&1; then
-        log_warning "MinIO Ingress not found - Velero installation may be incomplete"
-        log_info "Run: cd ../backup && ./velero_install_local.sh --fix-publicurl"
-        return 0
-    fi
-    
-    # Check current publicUrl
-    local current_publicurl=$(kubectl --context="${KUBE_CONTEXT}" get backupstoragelocation default -n "${VELERO_NAMESPACE}" -o jsonpath='{.spec.config.publicUrl}' 2>/dev/null || echo "")
-    
-    # Verify publicUrl is using the ingress host
-    local expected_publicurl="http://minio.velero.localhost:8080"
-    if echo "$current_publicurl" | grep -q "\.svc" || [ "$current_publicurl" != "$expected_publicurl" ]; then
-        log_warning "MinIO publicUrl is not configured correctly (current: ${current_publicurl})"
-        log_info "Fixing publicUrl to use Ingress: ${expected_publicurl}..."
-        
-        # Update backup location publicUrl
-        kubectl --context="${KUBE_CONTEXT}" patch backupstoragelocation default \
-            -n "${VELERO_NAMESPACE}" \
-            --type merge \
-            -p "{\"spec\":{\"config\":{\"publicUrl\":\"${expected_publicurl}\"}}}" || {
-            log_warning "Failed to update publicUrl, but continuing..."
-            return 0
-        }
-        
-        log_success "MinIO publicUrl fixed to: ${expected_publicurl}"
-    else
-        log_info "MinIO publicUrl is correctly configured: ${current_publicurl}"
-    fi
-}
 
 # Import backup to cluster
 import_backup() {
@@ -348,7 +308,6 @@ create_restore() {
     local restore_args=(
         "restore" "create" "${RESTORE_NAME}"
         "--from-backup" "${BACKUP_NAME}"
-        "--force"
         "--kubecontext" "${KUBE_CONTEXT}"
     )
     
@@ -698,7 +657,6 @@ EOF
     
     # Execute restore
     validate_prerequisites
-    verify_minio_publicurl
     import_backup
     validate_backup
     confirm_restore

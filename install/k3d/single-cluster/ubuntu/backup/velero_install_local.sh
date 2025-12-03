@@ -230,14 +230,13 @@ install_velero_local() {
     # This uses hostPath volumes instead of cloud object storage
     
     # Install Velero with local configuration
-    # Note: publicUrl will be updated after MinIO is deployed with Ingress
     velero install \
         --provider aws \
         --plugins velero/velero-plugin-for-aws:v1.8.0 \
         --bucket local \
         --use-node-agent \
         --use-volume-snapshots=false \
-        --backup-location-config region=default,s3ForcePathStyle=true,s3Url=http://minio.velero.svc:9000,publicUrl=http://minio.velero.localhost:8080 \
+        --backup-location-config region=default,s3ForcePathStyle=true,s3Url=http://minio.velero.svc:9000 \
         --no-secret \
         --kubecontext "${KUBE_CONTEXT}"
     
@@ -324,26 +323,6 @@ spec:
   selector:
     app: minio
 ---
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: minio
-  namespace: ${VELERO_NAMESPACE}
-  annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: web
-spec:
-  rules:
-  - host: minio.velero.localhost
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: minio
-            port:
-              number: 9000
----
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -379,23 +358,15 @@ EOF
         log_warning "MinIO setup job may still be running"
     }
     
-    # Create Ingress for MinIO (already included in the YAML above)
-    log_info "Ingress created for MinIO"
-    
-    # Update Velero backup location with credentials and publicUrl
+    # Update Velero backup location with credentials
     log_info "Configuring Velero backup location..."
-    
-    # For k3d, publicUrl should use the ingress host with port 8080 (Traefik)
-    # The internal s3Url stays as cluster DNS, but publicUrl needs to be accessible from CLI
-    local public_url="http://minio.velero.localhost:8080"
     
     kubectl --context="${KUBE_CONTEXT}" patch backupstoragelocation default \
         -n "${VELERO_NAMESPACE}" \
         --type merge \
-        -p "{\"spec\":{\"credential\":{\"name\":\"minio-credentials\",\"key\":\"cloud\"},\"config\":{\"publicUrl\":\"${public_url}\"}}}"
+        -p "{\"spec\":{\"credential\":{\"name\":\"minio-credentials\",\"key\":\"cloud\"}}}"
     
     log_success "MinIO deployed and configured"
-    log_info "MinIO accessible via Ingress at: ${public_url}"
 }
 
 # Verify Velero installation
@@ -429,44 +400,6 @@ verify_installation() {
     log_success "Velero installation verified"
 }
 
-# Fix MinIO publicUrl for existing installations
-fix_minio_publicurl() {
-    log_step "Fixing MinIO publicUrl configuration..."
-    
-    # Check if MinIO service exists
-    if ! kubectl --context="${KUBE_CONTEXT}" get svc minio -n "${VELERO_NAMESPACE}" >/dev/null 2>&1; then
-        log_error "MinIO service not found"
-        return 1
-    fi
-    
-    # Ensure MinIO service is ClusterIP (not NodePort)
-    local svc_type=$(kubectl --context="${KUBE_CONTEXT}" get svc minio -n "${VELERO_NAMESPACE}" -o jsonpath='{.spec.type}' 2>/dev/null || echo "")
-    
-    if [ "$svc_type" = "NodePort" ]; then
-        log_info "Converting MinIO service to ClusterIP..."
-        kubectl --context="${KUBE_CONTEXT}" patch svc minio -n "${VELERO_NAMESPACE}" \
-            --type merge \
-            -p '{"spec":{"type":"ClusterIP"}}' || {
-            log_warning "Failed to update service type, continuing..."
-        }
-    fi
-    
-    # Use ingress host for publicUrl
-    local public_url="http://minio.velero.localhost:8080"
-    
-    # Update backup location publicUrl
-    log_info "Updating backup location publicUrl to: ${public_url}"
-    
-    kubectl --context="${KUBE_CONTEXT}" patch backupstoragelocation default \
-        -n "${VELERO_NAMESPACE}" \
-        --type merge \
-        -p "{\"spec\":{\"config\":{\"publicUrl\":\"${public_url}\"}}}" || {
-        log_warning "Failed to update publicUrl, but continuing..."
-        return 0
-    }
-    
-    log_success "MinIO publicUrl fixed to: ${public_url}"
-}
 
 # Create initial backup schedule
 create_backup_schedule() {
@@ -510,7 +443,6 @@ Uses local filesystem storage - no cloud credentials needed.
 Options:
   --backup-dir DIR             Local backup directory [default: ../openchoreo-backups]
   --cluster-name NAME          Cluster name [default: openchoreo]
-  --fix-publicurl              Fix MinIO publicUrl and create Ingress for existing installation
   --help, -h                   Show this help message
 
 Environment Variables:
@@ -526,17 +458,12 @@ Examples:
   
   # Install for different cluster
   $0 --cluster-name my-cluster
-  
-  # Fix MinIO publicUrl and create Ingress for existing installation
-  $0 --fix-publicurl
 
 EOF
 }
 
 # Parse command line arguments
 parse_args() {
-    FIX_PUBLICURL_ONLY=false
-    
     while [[ $# -gt 0 ]]; do
         case $1 in
             --backup-dir)
@@ -547,10 +474,6 @@ parse_args() {
                 CLUSTER_NAME="$2"
                 KUBE_CONTEXT="k3d-${CLUSTER_NAME}"
                 shift 2
-                ;;
-            --fix-publicurl)
-                FIX_PUBLICURL_ONLY=true
-                shift
                 ;;
             --help|-h)
                 show_usage
@@ -581,13 +504,6 @@ EOF
     
     parse_args "$@"
     
-    # If only fixing publicUrl, do that and exit
-    if [ "$FIX_PUBLICURL_ONLY" = "true" ]; then
-        validate_prerequisites
-        fix_minio_publicurl
-        exit 0
-    fi
-    
     # Display configuration
     log_info "Configuration:"
     log_info "  Cluster: ${CLUSTER_NAME} (${KUBE_CONTEXT})"
@@ -610,7 +526,6 @@ EOF
     
     echo -e "${CYAN}Backup Location:${RESET} ${BACKUP_DIR}"
     echo -e "${CYAN}Storage Type:${RESET} Local MinIO (S3-compatible)"
-    echo -e "${CYAN}MinIO Access:${RESET} http://minio.velero.localhost:8080 (via Ingress)"
     
     echo -e "\n${CYAN}Next Steps:${RESET}"
     echo -e "  1. Create a backup:      ${YELLOW}../backup/velero_backup.sh${RESET}"
@@ -620,7 +535,6 @@ EOF
     
     echo -e "\n${CYAN}Important Notes:${RESET}"
     echo -e "  • Backups are stored locally in: ${BACKUP_DIR}"
-    echo -e "  • MinIO is accessible via Ingress at: http://minio.velero.localhost:8080"
     echo -e "  • For VM backups, backup this directory externally"
     echo -e "  • For production, consider cloud storage (use velero_install.sh)"
     
