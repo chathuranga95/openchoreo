@@ -1,7 +1,7 @@
 // Copyright 2025 The OpenChoreo Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package tools
+package legacytools
 
 import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -33,17 +33,45 @@ func (t *Toolsets) componentToolRegistrations() []RegisterFunc {
 		t.RegisterListComponents,
 		t.RegisterGetComponent,
 		t.RegisterPatchComponent,
+		t.RegisterUpdateComponentBinding,
 		t.RegisterGetComponentWorkloads,
 		t.RegisterListComponentReleases,
 		t.RegisterCreateComponentRelease,
 		t.RegisterGetComponentRelease,
 		t.RegisterGetComponentSchema,
+		t.RegisterGetComponentReleaseSchema,
 		t.RegisterListReleaseBindings,
 		t.RegisterPatchReleaseBinding,
 		t.RegisterDeployRelease,
 		t.RegisterPromoteComponent,
 		t.RegisterCreateWorkload,
+		t.RegisterListComponentTraits,
+		t.RegisterUpdateComponentTraits,
 		t.RegisterGetEnvironmentRelease,
+		t.RegisterListComponentWorkflows,
+		t.RegisterGetComponentWorkflowSchema,
+		t.RegisterTriggerComponentWorkflow,
+		t.RegisterListComponentWorkflowRuns,
+		t.RegisterUpdateComponentWorkflowSchema,
+	}
+}
+
+// buildToolRegistrations returns the list of build toolset registration functions
+func (t *Toolsets) buildToolRegistrations() []RegisterFunc {
+	return []RegisterFunc{
+		t.RegisterListBuildTemplates,
+		t.RegisterTriggerBuild,
+		t.RegisterListBuilds,
+		t.RegisterGetBuildObserverURL,
+		t.RegisterListBuildPlanes,
+	}
+}
+
+// deploymentToolRegistrations returns the list of deployment toolset registration functions
+func (t *Toolsets) deploymentToolRegistrations() []RegisterFunc {
+	return []RegisterFunc{
+		t.RegisterGetDeploymentPipeline,
+		t.RegisterGetComponentObserverURL,
 	}
 }
 
@@ -58,9 +86,13 @@ func (t *Toolsets) infrastructureToolRegistrations() []RegisterFunc {
 		t.RegisterCreateDataPlane,
 		t.RegisterListComponentTypes,
 		t.RegisterGetComponentTypeSchema,
+		t.RegisterListWorkflows,
+		t.RegisterGetWorkflowSchema,
 		t.RegisterListTraits,
 		t.RegisterGetTraitSchema,
 		t.RegisterListObservabilityPlanes,
+		t.RegisterListComponentWorkflowsOrgLevel,
+		t.RegisterGetComponentWorkflowSchemaOrgLevel,
 		t.RegisterListClusterDataPlanes,
 		t.RegisterGetClusterDataPlane,
 		t.RegisterCreateClusterDataPlane,
@@ -72,6 +104,22 @@ func (t *Toolsets) infrastructureToolRegistrations() []RegisterFunc {
 		t.RegisterListClusterTraits,
 		t.RegisterGetClusterTrait,
 		t.RegisterGetClusterTraitSchema,
+	}
+}
+
+// schemaToolRegistrations returns the list of schema toolset registration functions
+func (t *Toolsets) schemaToolRegistrations() []RegisterFunc {
+	return []RegisterFunc{
+		t.RegisterExplainSchema,
+	}
+}
+
+// resourceToolRegistrations returns the list of resource toolset registration functions
+func (t *Toolsets) resourceToolRegistrations() []RegisterFunc {
+	return []RegisterFunc{
+		t.RegisterApplyResource,
+		t.RegisterDeleteResource,
+		t.RegisterGetResource,
 	}
 }
 
@@ -97,9 +145,37 @@ func (t *Toolsets) Register(s *mcp.Server) {
 		}
 	}
 
+	// Register build tools if BuildToolset is enabled
+	if t.BuildToolset != nil {
+		for _, registerFunc := range t.buildToolRegistrations() {
+			registerFunc(s)
+		}
+	}
+
+	// Register deployment tools if DeploymentToolset is enabled
+	if t.DeploymentToolset != nil {
+		for _, registerFunc := range t.deploymentToolRegistrations() {
+			registerFunc(s)
+		}
+	}
+
 	// Register infrastructure tools if InfrastructureToolset is enabled
 	if t.InfrastructureToolset != nil {
 		for _, registerFunc := range t.infrastructureToolRegistrations() {
+			registerFunc(s)
+		}
+	}
+
+	// Register schema tools if SchemaToolset is enabled
+	if t.SchemaToolset != nil {
+		for _, registerFunc := range t.schemaToolRegistrations() {
+			registerFunc(s)
+		}
+	}
+
+	// Register resource tools if ResourceToolset is enabled
+	if t.ResourceToolset != nil {
+		for _, registerFunc := range t.resourceToolRegistrations() {
 			registerFunc(s)
 		}
 	}

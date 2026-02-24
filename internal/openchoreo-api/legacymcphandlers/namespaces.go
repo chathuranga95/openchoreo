@@ -1,7 +1,7 @@
-// Copyright 2026 The OpenChoreo Authors
+// Copyright 2025 The OpenChoreo Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package mcphandlers
+package legacymcphandlers
 
 import (
 	"context"
@@ -20,7 +20,7 @@ func (h *MCPHandler) ListNamespaces(ctx context.Context) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return wrapList("namespaces", result.Items), nil
+	return result.Items, nil
 }
 
 func (h *MCPHandler) GetNamespace(ctx context.Context, name string) (any, error) {
@@ -53,5 +53,5 @@ func (h *MCPHandler) ListSecretReferences(ctx context.Context, namespaceName str
 	if err != nil {
 		return nil, err
 	}
-	return wrapList("secret_references", result.Items), nil
+	return result.Items, nil
 }

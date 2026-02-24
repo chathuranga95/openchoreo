@@ -1,7 +1,7 @@
 // Copyright 2026 The OpenChoreo Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package mcphandlers
+package legacymcphandlers
 
 import (
 	"context"
@@ -14,7 +14,7 @@ type ListClusterTraitsResponse struct {
 	ClusterTraits []*models.TraitResponse `json:"cluster_traits"`
 }
 
-func (h *MCPHandler) ListClusterTraits(ctx context.Context) (any, error) {
+func (h *LegacyMCPHandler) ListClusterTraits(ctx context.Context) (any, error) {
 	clusterTraits, err := h.Services.ClusterTraitService.ListClusterTraits(ctx)
 	if err != nil {
 		return ListClusterTraitsResponse{}, fmt.Errorf("list cluster traits failed: %w", err)
@@ -24,7 +24,7 @@ func (h *MCPHandler) ListClusterTraits(ctx context.Context) (any, error) {
 	}, nil
 }
 
-func (h *MCPHandler) GetClusterTrait(ctx context.Context, ctName string) (any, error) {
+func (h *LegacyMCPHandler) GetClusterTrait(ctx context.Context, ctName string) (any, error) {
 	result, err := h.Services.ClusterTraitService.GetClusterTrait(ctx, ctName)
 	if err != nil {
 		return nil, fmt.Errorf("get cluster trait %q failed: %w", ctName, err)
@@ -32,7 +32,7 @@ func (h *MCPHandler) GetClusterTrait(ctx context.Context, ctName string) (any, e
 	return result, nil
 }
 
-func (h *MCPHandler) GetClusterTraitSchema(ctx context.Context, ctName string) (any, error) {
+func (h *LegacyMCPHandler) GetClusterTraitSchema(ctx context.Context, ctName string) (any, error) {
 	result, err := h.Services.ClusterTraitService.GetClusterTraitSchema(ctx, ctName)
 	if err != nil {
 		return nil, fmt.Errorf("get cluster trait schema %q failed: %w", ctName, err)

@@ -62,7 +62,7 @@ func TestPartialToolsetRegistration(t *testing.T) {
 	toolsets := &Toolsets{
 		NamespaceToolset: mockHandler,
 		ProjectToolset:   mockHandler,
-		// Intentionally omitting ComponentToolset, BuildToolset, DeploymentToolset, InfrastructureToolset
+		// Intentionally omitting ComponentToolset, InfrastructureToolset
 	}
 
 	clientSession := setupTestServerWithToolset(t, toolsets)

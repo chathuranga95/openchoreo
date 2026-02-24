@@ -1,7 +1,11 @@
 // Copyright 2025 The OpenChoreo Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package tools
+// Package legacytools contains the original (pre-migration) MCP tool
+// definitions with all 8 toolsets and the full handler interfaces.
+// It is used by the legacy MCP server and will be removed once the
+// OpenAPI migration is complete.
+package legacytools
 
 import (
 	"context"
@@ -18,14 +22,22 @@ const (
 	ToolsetNamespace      ToolsetType = "namespace"
 	ToolsetProject        ToolsetType = "project"
 	ToolsetComponent      ToolsetType = "component"
+	ToolsetBuild          ToolsetType = "build"
+	ToolsetDeployment     ToolsetType = "deployment"
 	ToolsetInfrastructure ToolsetType = "infrastructure"
+	ToolsetSchema         ToolsetType = "schema"
+	ToolsetResource       ToolsetType = "resource"
 )
 
 type Toolsets struct {
 	NamespaceToolset      NamespaceToolsetHandler
 	ProjectToolset        ProjectToolsetHandler
 	ComponentToolset      ComponentToolsetHandler
+	BuildToolset          BuildToolsetHandler
+	DeploymentToolset     DeploymentToolsetHandler
 	InfrastructureToolset InfrastructureToolsetHandler
+	SchemaToolset         SchemaToolsetHandler
+	ResourceToolset       ResourceToolsetHandler
 }
 
 // NamespaceToolsetHandler handles namespace operations
@@ -53,6 +65,10 @@ type ComponentToolsetHandler interface {
 	GetComponent(
 		ctx context.Context, namespaceName, projectName, componentName string, additionalResources []string,
 	) (any, error)
+	UpdateComponentBinding(
+		ctx context.Context, namespaceName, projectName, componentName, bindingName string,
+		req *models.UpdateBindingRequest,
+	) (any, error)
 	GetComponentWorkloads(ctx context.Context, namespaceName, projectName, componentName string) (any, error)
 	// Component release operations
 	ListComponentReleases(ctx context.Context, namespaceName, projectName, componentName string) (any, error)
@@ -79,6 +95,14 @@ type ComponentToolsetHandler interface {
 	) (any, error)
 	// Schema operations
 	GetComponentSchema(ctx context.Context, namespaceName, projectName, componentName string) (any, error)
+	GetComponentReleaseSchema(
+		ctx context.Context, namespaceName, projectName, componentName, releaseName string,
+	) (any, error)
+	// Trait operations
+	ListComponentTraits(ctx context.Context, namespaceName, projectName, componentName string) (any, error)
+	UpdateComponentTraits(
+		ctx context.Context, namespaceName, projectName, componentName string, req *models.UpdateComponentTraitsRequest,
+	) (any, error)
 	// Release operations
 	GetEnvironmentRelease(
 		ctx context.Context, namespaceName, projectName, componentName, environmentName string,
@@ -86,6 +110,32 @@ type ComponentToolsetHandler interface {
 	// Component patch operations
 	PatchComponent(
 		ctx context.Context, namespaceName, projectName, componentName string, req *models.PatchComponentRequest,
+	) (any, error)
+	// Component workflow operations
+	ListComponentWorkflows(ctx context.Context, namespaceName string) (any, error)
+	GetComponentWorkflowSchema(ctx context.Context, namespaceName, cwName string) (any, error)
+	TriggerComponentWorkflow(ctx context.Context, namespaceName, projectName, componentName, commit string) (any, error)
+	ListComponentWorkflowRuns(ctx context.Context, namespaceName, projectName, componentName string) (any, error)
+	UpdateComponentWorkflowSchema(
+		ctx context.Context, namespaceName, projectName, componentName string,
+		req *models.UpdateComponentWorkflowRequest,
+	) (any, error)
+}
+
+// BuildToolsetHandler handles build operations
+type BuildToolsetHandler interface {
+	ListBuildTemplates(ctx context.Context, namespaceName string) (any, error)
+	TriggerBuild(ctx context.Context, namespaceName, projectName, componentName, commit string) (any, error)
+	ListBuilds(ctx context.Context, namespaceName, projectName, componentName string) (any, error)
+	GetBuildObserverURL(ctx context.Context, namespaceName, projectName, componentName string) (any, error)
+	ListBuildPlanes(ctx context.Context, namespaceName string) (any, error)
+}
+
+// DeploymentToolsetHandler handles deployment operations
+type DeploymentToolsetHandler interface {
+	GetProjectDeploymentPipeline(ctx context.Context, namespaceName, projectName string) (any, error)
+	GetComponentObserverURL(
+		ctx context.Context, namespaceName, projectName, componentName, environmentName string,
 	) (any, error)
 }
 
@@ -105,12 +155,20 @@ type InfrastructureToolsetHandler interface {
 	ListComponentTypes(ctx context.Context, namespaceName string) (any, error)
 	GetComponentTypeSchema(ctx context.Context, namespaceName, ctName string) (any, error)
 
+	// Workflow operations
+	ListWorkflows(ctx context.Context, namespaceName string) (any, error)
+	GetWorkflowSchema(ctx context.Context, namespaceName, workflowName string) (any, error)
+
 	// Trait operations
 	ListTraits(ctx context.Context, namespaceName string) (any, error)
 	GetTraitSchema(ctx context.Context, namespaceName, traitName string) (any, error)
 
 	// ObservabilityPlane operations
 	ListObservabilityPlanes(ctx context.Context, namespaceName string) (any, error)
+
+	// ComponentWorkflow operations (namespace-level)
+	ListComponentWorkflows(ctx context.Context, namespaceName string) (any, error)
+	GetComponentWorkflowSchema(ctx context.Context, namespaceName, cwName string) (any, error)
 }
 
 // ClusterPlaneHandler is an optional extension of InfrastructureToolsetHandler
@@ -139,6 +197,18 @@ type ClusterPlaneHandler interface {
 	ListClusterTraits(ctx context.Context) (any, error)
 	GetClusterTrait(ctx context.Context, ctName string) (any, error)
 	GetClusterTraitSchema(ctx context.Context, ctName string) (any, error)
+}
+
+// SchemaToolsetHandler handles schema and resource explanation operations
+type SchemaToolsetHandler interface {
+	ExplainSchema(ctx context.Context, kind, path string) (any, error)
+}
+
+// ResourceToolsetHandler handles kubectl-like resource operations (apply/delete/get)
+type ResourceToolsetHandler interface {
+	ApplyResource(ctx context.Context, resource map[string]interface{}) (any, error)
+	DeleteResource(ctx context.Context, resource map[string]interface{}) (any, error)
+	GetResource(ctx context.Context, namespaceName, kind, resourceName string) (any, error)
 }
 
 // RegisterFunc is a function type for registering MCP tools

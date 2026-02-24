@@ -1,4 +1,4 @@
-// Copyright 2025 The OpenChoreo Authors
+// Copyright 2026 The OpenChoreo Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package mcphandlers
@@ -6,28 +6,41 @@ package mcphandlers
 import (
 	"context"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	openchoreov1alpha1 "github.com/openchoreo/openchoreo/api/v1alpha1"
+	"github.com/openchoreo/openchoreo/internal/controller"
 	"github.com/openchoreo/openchoreo/internal/openchoreo-api/models"
+	"github.com/openchoreo/openchoreo/internal/openchoreo-api/services"
 )
 
-type ListProjectsResponse struct {
-	Projects []*models.ProjectResponse `json:"projects"`
-}
-
 func (h *MCPHandler) ListProjects(ctx context.Context, namespaceName string) (any, error) {
-	projects, err := h.Services.ProjectService.ListProjects(ctx, namespaceName)
+	result, err := h.services.ProjectService.ListProjects(ctx, namespaceName, services.ListOptions{})
 	if err != nil {
-		return ListProjectsResponse{}, err
+		return nil, err
 	}
-
-	return ListProjectsResponse{
-		Projects: projects,
-	}, nil
+	return wrapList("projects", result.Items), nil
 }
 
 func (h *MCPHandler) GetProject(ctx context.Context, namespaceName, projectName string) (any, error) {
-	return h.Services.ProjectService.GetProject(ctx, namespaceName, projectName)
+	return h.services.ProjectService.GetProject(ctx, namespaceName, projectName)
 }
 
 func (h *MCPHandler) CreateProject(ctx context.Context, namespaceName string, req *models.CreateProjectRequest) (any, error) {
-	return h.Services.ProjectService.CreateProject(ctx, namespaceName, req)
+	project := &openchoreov1alpha1.Project{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        req.Name,
+			Namespace:   namespaceName,
+			Annotations: make(map[string]string),
+		},
+	}
+
+	if req.DisplayName != "" {
+		project.Annotations[controller.AnnotationKeyDisplayName] = req.DisplayName
+	}
+	if req.Description != "" {
+		project.Annotations[controller.AnnotationKeyDescription] = req.Description
+	}
+
+	return h.services.ProjectService.CreateProject(ctx, namespaceName, project)
 }

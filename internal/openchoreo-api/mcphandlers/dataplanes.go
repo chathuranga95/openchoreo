@@ -1,4 +1,4 @@
-// Copyright 2025 The OpenChoreo Authors
+// Copyright 2026 The OpenChoreo Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package mcphandlers
@@ -6,27 +6,62 @@ package mcphandlers
 import (
 	"context"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	openchoreov1alpha1 "github.com/openchoreo/openchoreo/api/v1alpha1"
+	"github.com/openchoreo/openchoreo/internal/controller"
 	"github.com/openchoreo/openchoreo/internal/openchoreo-api/models"
+	"github.com/openchoreo/openchoreo/internal/openchoreo-api/services"
 )
 
-type ListDataPlanesResponse struct {
-	DataPlanes []*models.DataPlaneResponse `json:"data_planes"`
-}
-
 func (h *MCPHandler) ListDataPlanes(ctx context.Context, namespaceName string) (any, error) {
-	dataplanes, err := h.Services.DataPlaneService.ListDataPlanes(ctx, namespaceName)
+	result, err := h.services.DataPlaneService.ListDataPlanes(ctx, namespaceName, services.ListOptions{})
 	if err != nil {
-		return ListDataPlanesResponse{}, err
+		return nil, err
 	}
-	return ListDataPlanesResponse{
-		DataPlanes: dataplanes,
-	}, nil
+	return wrapList("data_planes", result.Items), nil
 }
 
 func (h *MCPHandler) GetDataPlane(ctx context.Context, namespaceName, dpName string) (any, error) {
-	return h.Services.DataPlaneService.GetDataPlane(ctx, namespaceName, dpName)
+	return h.services.DataPlaneService.GetDataPlane(ctx, namespaceName, dpName)
 }
 
 func (h *MCPHandler) CreateDataPlane(ctx context.Context, namespaceName string, req *models.CreateDataPlaneRequest) (any, error) {
-	return h.Services.DataPlaneService.CreateDataPlane(ctx, namespaceName, req)
+	dp := &openchoreov1alpha1.DataPlane{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        req.Name,
+			Namespace:   namespaceName,
+			Annotations: make(map[string]string),
+		},
+		Spec: openchoreov1alpha1.DataPlaneSpec{
+			ClusterAgent: openchoreov1alpha1.ClusterAgentConfig{
+				ClientCA: openchoreov1alpha1.ValueFrom{
+					Value: req.ClusterAgentClientCA,
+				},
+			},
+			Gateway: openchoreov1alpha1.GatewaySpec{
+				PublicVirtualHost:       req.PublicVirtualHost,
+				OrganizationVirtualHost: req.OrganizationVirtualHost,
+				PublicHTTPPort:          derefInt32(req.PublicHTTPPort),
+				PublicHTTPSPort:         derefInt32(req.PublicHTTPSPort),
+				OrganizationHTTPPort:    derefInt32(req.OrganizationHTTPPort),
+				OrganizationHTTPSPort:   derefInt32(req.OrganizationHTTPSPort),
+			},
+		},
+	}
+
+	if req.DisplayName != "" {
+		dp.Annotations[controller.AnnotationKeyDisplayName] = req.DisplayName
+	}
+	if req.Description != "" {
+		dp.Annotations[controller.AnnotationKeyDescription] = req.Description
+	}
+	if req.ObservabilityPlaneRef != nil {
+		dp.Spec.ObservabilityPlaneRef = &openchoreov1alpha1.ObservabilityPlaneRef{
+			Kind: openchoreov1alpha1.ObservabilityPlaneRefKind(req.ObservabilityPlaneRef.Kind),
+			Name: req.ObservabilityPlaneRef.Name,
+		}
+	}
+
+	return h.services.DataPlaneService.CreateDataPlane(ctx, namespaceName, dp)
 }

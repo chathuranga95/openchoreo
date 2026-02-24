@@ -1,7 +1,7 @@
 // Copyright 2025 The OpenChoreo Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package mcphandlers
+package legacymcphandlers
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-func (h *MCPHandler) ApplyResource(ctx context.Context, resource map[string]interface{}) (any, error) {
+func (h *LegacyMCPHandler) ApplyResource(ctx context.Context, resource map[string]interface{}) (any, error) {
 	// Validate resource
 	kind, apiVersion, name, err := validateResourceRequest(resource)
 	if err != nil {
@@ -91,7 +91,7 @@ func (h *MCPHandler) ApplyResource(ctx context.Context, resource map[string]inte
 	}, nil
 }
 
-func (h *MCPHandler) GetResource(ctx context.Context, namespaceName, kind, resourceName string) (any, error) {
+func (h *LegacyMCPHandler) GetResource(ctx context.Context, namespaceName, kind, resourceName string) (any, error) {
 	if kind == "" {
 		return nil, fmt.Errorf("missing 'kind' field")
 	}
@@ -131,7 +131,7 @@ func (h *MCPHandler) GetResource(ctx context.Context, namespaceName, kind, resou
 	return obj.Object, nil
 }
 
-func (h *MCPHandler) DeleteResource(ctx context.Context, resource map[string]interface{}) (any, error) {
+func (h *LegacyMCPHandler) DeleteResource(ctx context.Context, resource map[string]interface{}) (any, error) {
 	// Validate resource
 	kind, apiVersion, name, err := validateResourceRequest(resource)
 	if err != nil {
@@ -237,7 +237,7 @@ func validateResourceRequest(resourceObj map[string]interface{}) (string, string
 }
 
 // handleResourceNamespace handles namespace logic for both cluster-scoped and namespaced resources
-func (h *MCPHandler) handleResourceNamespace(obj *unstructured.Unstructured, apiVersion, kind string) error {
+func (h *LegacyMCPHandler) handleResourceNamespace(obj *unstructured.Unstructured, apiVersion, kind string) error {
 	// Parse the GroupVersion from apiVersion
 	gv, err := schema.ParseGroupVersion(apiVersion)
 	if err != nil {
@@ -268,7 +268,7 @@ func (h *MCPHandler) handleResourceNamespace(obj *unstructured.Unstructured, api
 }
 
 // isClusterScopedResource determines if a resource is cluster-scoped
-func (h *MCPHandler) isClusterScopedResource(gvk schema.GroupVersionKind) bool {
+func (h *LegacyMCPHandler) isClusterScopedResource(gvk schema.GroupVersionKind) bool {
 	// List of known cluster-scoped OpenChoreo resources
 	clusterScopedResources := map[string]bool{
 		"Namespace":                 true,
@@ -283,7 +283,7 @@ func (h *MCPHandler) isClusterScopedResource(gvk schema.GroupVersionKind) bool {
 }
 
 // handleNamespacedResource handles namespace defaulting for namespaced resources
-func (h *MCPHandler) handleNamespacedResource(obj *unstructured.Unstructured) error {
+func (h *LegacyMCPHandler) handleNamespacedResource(obj *unstructured.Unstructured) error {
 	// If namespace is already set, keep it
 	if obj.GetNamespace() != "" {
 		return nil

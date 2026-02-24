@@ -1197,11 +1197,11 @@ openchoreoApi:
         - "namespace"
         - "project"
         - "component"
-        - "build"
-        - "deployment"
+        # - "build"
+        # - "deployment"
         - "infrastructure"
-        - "schema"
-        - "resource"
+        # - "schema"
+        # - "resource"
     # @schema
     # type: object
     # description: Logging configuration

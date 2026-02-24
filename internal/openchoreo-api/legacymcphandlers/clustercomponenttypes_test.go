@@ -1,7 +1,7 @@
 // Copyright 2026 The OpenChoreo Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package mcphandlers
+package legacymcphandlers
 
 import (
 	"context"
@@ -28,10 +28,12 @@ func newCCTHandler(t *testing.T, objects []client.Object) *MCPHandler {
 		WithObjects(objects...).
 		Build()
 	return &MCPHandler{
-		Services: &services.Services{
-			ClusterComponentTypeService: services.NewClusterComponentTypeService(
-				fakeClient, slog.Default(), &allowAllPDP{},
-			),
+		LegacyMCPHandler: LegacyMCPHandler{
+			Services: &services.Services{
+				ClusterComponentTypeService: services.NewClusterComponentTypeService(
+					fakeClient, slog.Default(), &allowAllPDP{},
+				),
+			},
 		},
 	}
 }

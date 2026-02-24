@@ -1,7 +1,7 @@
 // Copyright 2025 The OpenChoreo Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package mcphandlers
+package legacymcphandlers
 
 import (
 	"context"
@@ -14,7 +14,7 @@ type ListClusterDataPlanesResponse struct {
 	ClusterDataPlanes []*models.ClusterDataPlaneResponse `json:"cluster_data_planes"`
 }
 
-func (h *MCPHandler) ListClusterDataPlanes(ctx context.Context) (any, error) {
+func (h *LegacyMCPHandler) ListClusterDataPlanes(ctx context.Context) (any, error) {
 	clusterDataPlanes, err := h.Services.ClusterDataPlaneService.ListClusterDataPlanes(ctx)
 	if err != nil {
 		return ListClusterDataPlanesResponse{}, fmt.Errorf("list cluster dataplanes failed: %w", err)
@@ -24,7 +24,7 @@ func (h *MCPHandler) ListClusterDataPlanes(ctx context.Context) (any, error) {
 	}, nil
 }
 
-func (h *MCPHandler) GetClusterDataPlane(ctx context.Context, cdpName string) (any, error) {
+func (h *LegacyMCPHandler) GetClusterDataPlane(ctx context.Context, cdpName string) (any, error) {
 	result, err := h.Services.ClusterDataPlaneService.GetClusterDataPlane(ctx, cdpName)
 	if err != nil {
 		return nil, fmt.Errorf("get cluster dataplane %q failed: %w", cdpName, err)
@@ -32,7 +32,7 @@ func (h *MCPHandler) GetClusterDataPlane(ctx context.Context, cdpName string) (a
 	return result, nil
 }
 
-func (h *MCPHandler) CreateClusterDataPlane(ctx context.Context, req *models.CreateClusterDataPlaneRequest) (any, error) {
+func (h *LegacyMCPHandler) CreateClusterDataPlane(ctx context.Context, req *models.CreateClusterDataPlaneRequest) (any, error) {
 	result, err := h.Services.ClusterDataPlaneService.CreateClusterDataPlane(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("create cluster dataplane failed: %w", err)

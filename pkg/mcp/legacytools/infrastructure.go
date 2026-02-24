@@ -1,7 +1,7 @@
 // Copyright 2025 The OpenChoreo Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package tools
+package legacytools
 
 import (
 	"context"
@@ -238,6 +238,40 @@ func (t *Toolsets) RegisterGetComponentTypeSchema(s *mcp.Server) {
 	})
 }
 
+func (t *Toolsets) RegisterListWorkflows(s *mcp.Server) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "list_workflows",
+		Description: "List all available component-workflows in an namespace. Workflows define build and deployment " +
+			"processes for components.",
+		InputSchema: createSchema(map[string]any{
+			"namespace_name": defaultStringProperty(),
+		}, []string{"namespace_name"}),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct {
+		NamespaceName string `json:"namespace_name"`
+	}) (*mcp.CallToolResult, any, error) {
+		result, err := t.InfrastructureToolset.ListWorkflows(ctx, args.NamespaceName)
+		return handleToolResult(result, err)
+	})
+}
+
+func (t *Toolsets) RegisterGetWorkflowSchema(s *mcp.Server) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "get_workflow_schema",
+		Description: "Get the schema definition for a workflow. Returns the JSON schema showing workflow " +
+			"configuration options and parameters.",
+		InputSchema: createSchema(map[string]any{
+			"namespace_name": defaultStringProperty(),
+			"workflow_name":  stringProperty("Workflow name. Use list_workflows to discover valid names"),
+		}, []string{"namespace_name", "workflow_name"}),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct {
+		NamespaceName string `json:"namespace_name"`
+		WorkflowName  string `json:"workflow_name"`
+	}) (*mcp.CallToolResult, any, error) {
+		result, err := t.InfrastructureToolset.GetWorkflowSchema(ctx, args.NamespaceName, args.WorkflowName)
+		return handleToolResult(result, err)
+	})
+}
+
 func (t *Toolsets) RegisterListTraits(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "list_traits",
@@ -284,6 +318,39 @@ func (t *Toolsets) RegisterListObservabilityPlanes(s *mcp.Server) {
 		NamespaceName string `json:"namespace_name"`
 	}) (*mcp.CallToolResult, any, error) {
 		result, err := t.InfrastructureToolset.ListObservabilityPlanes(ctx, args.NamespaceName)
+		return handleToolResult(result, err)
+	})
+}
+func (t *Toolsets) RegisterListComponentWorkflowsOrgLevel(s *mcp.Server) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "list_component_workflows_org_level",
+		Description: "List all ComponentWorkflow templates available in an namespace. " +
+			"ComponentWorkflows are reusable workflow templates that can be triggered on components.",
+		InputSchema: createSchema(map[string]any{
+			"namespace_name": defaultStringProperty(),
+		}, []string{"namespace_name"}),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct {
+		NamespaceName string `json:"namespace_name"`
+	}) (*mcp.CallToolResult, any, error) {
+		result, err := t.InfrastructureToolset.ListComponentWorkflows(ctx, args.NamespaceName)
+		return handleToolResult(result, err)
+	})
+}
+
+func (t *Toolsets) RegisterGetComponentWorkflowSchemaOrgLevel(s *mcp.Server) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "get_component_workflow_schema_org_level",
+		Description: "Get the schema for a ComponentWorkflow template in an namespace. " +
+			"Returns the JSON schema defining the input parameters and configuration for the workflow.",
+		InputSchema: createSchema(map[string]any{
+			"namespace_name": defaultStringProperty(),
+			"cw_name":        defaultStringProperty(),
+		}, []string{"namespace_name", "cw_name"}),
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct {
+		NamespaceName string `json:"namespace_name"`
+		CWName        string `json:"cw_name"`
+	}) (*mcp.CallToolResult, any, error) {
+		result, err := t.InfrastructureToolset.GetComponentWorkflowSchema(ctx, args.NamespaceName, args.CWName)
 		return handleToolResult(result, err)
 	})
 }

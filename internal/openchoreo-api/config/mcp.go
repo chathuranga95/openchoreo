@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/openchoreo/openchoreo/internal/config"
+	"github.com/openchoreo/openchoreo/pkg/mcp/legacytools"
 	"github.com/openchoreo/openchoreo/pkg/mcp/tools"
 )
 
@@ -26,11 +27,11 @@ func MCPDefaults() MCPConfig {
 			string(tools.ToolsetNamespace),
 			string(tools.ToolsetProject),
 			string(tools.ToolsetComponent),
-			string(tools.ToolsetBuild),
-			string(tools.ToolsetDeployment),
 			string(tools.ToolsetInfrastructure),
-			string(tools.ToolsetSchema),
-			string(tools.ToolsetResource),
+			string(legacytools.ToolsetBuild),
+			string(legacytools.ToolsetDeployment),
+			string(legacytools.ToolsetSchema),
+			string(legacytools.ToolsetResource),
 		},
 	}
 }
@@ -40,11 +41,12 @@ var validToolsets = map[string]bool{
 	string(tools.ToolsetNamespace):      true,
 	string(tools.ToolsetProject):        true,
 	string(tools.ToolsetComponent):      true,
-	string(tools.ToolsetBuild):          true,
-	string(tools.ToolsetDeployment):     true,
 	string(tools.ToolsetInfrastructure): true,
-	string(tools.ToolsetSchema):         true,
-	string(tools.ToolsetResource):       true,
+	// Legacy-only toolsets (used by legacy MCP handler, not the new OpenAPI one)
+	string(legacytools.ToolsetBuild):      true,
+	string(legacytools.ToolsetDeployment): true,
+	string(legacytools.ToolsetSchema):     true,
+	string(legacytools.ToolsetResource):   true,
 }
 
 // Validate validates the MCP configuration.
@@ -66,6 +68,15 @@ func (c *MCPConfig) ParseToolsets() map[tools.ToolsetType]bool {
 	result := make(map[tools.ToolsetType]bool, len(c.Toolsets))
 	for _, ts := range c.Toolsets {
 		result[tools.ToolsetType(ts)] = true
+	}
+	return result
+}
+
+// ParseLegacyToolsets converts the toolset strings to a map of legacy ToolsetType for lookup.
+func (c *MCPConfig) ParseLegacyToolsets() map[legacytools.ToolsetType]bool {
+	result := make(map[legacytools.ToolsetType]bool, len(c.Toolsets))
+	for _, ts := range c.Toolsets {
+		result[legacytools.ToolsetType(ts)] = true
 	}
 	return result
 }

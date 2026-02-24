@@ -152,11 +152,11 @@ mcp:
     - namespace
     - project
     - component
-    - build
-    - deployment
+    # - build
+    # - deployment
     - infrastructure
-    - schema
-    - resource
+    # - schema
+    # - resource
 
 logging:
   # Minimum log level: debug, info, warn, error

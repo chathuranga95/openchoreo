@@ -1,4 +1,4 @@
-// Copyright 2025 The OpenChoreo Authors
+// Copyright 2026 The OpenChoreo Authors
 // SPDX-License-Identifier: Apache-2.0
 
 package mcphandlers
@@ -7,188 +7,230 @@ import (
 	"context"
 	"encoding/json"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+
 	openchoreov1alpha1 "github.com/openchoreo/openchoreo/api/v1alpha1"
-	services "github.com/openchoreo/openchoreo/internal/openchoreo-api/legacyservices"
+	"github.com/openchoreo/openchoreo/internal/controller"
 	"github.com/openchoreo/openchoreo/internal/openchoreo-api/models"
+	"github.com/openchoreo/openchoreo/internal/openchoreo-api/services"
+	componentsvc "github.com/openchoreo/openchoreo/internal/openchoreo-api/services/component"
 )
 
-type ListComponentsResponse struct {
-	Components []*models.ComponentResponse `json:"components"`
-}
+func (h *MCPHandler) CreateComponent(
+	ctx context.Context, namespaceName, projectName string, req *models.CreateComponentRequest,
+) (any, error) {
+	component := &openchoreov1alpha1.Component{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        req.Name,
+			Namespace:   namespaceName,
+			Annotations: make(map[string]string),
+		},
+		Spec: openchoreov1alpha1.ComponentSpec{
+			Owner: openchoreov1alpha1.ComponentOwner{
+				ProjectName: projectName,
+			},
+		},
+	}
 
-type ListComponentReleasesResponse struct {
-	Releases []*models.ComponentReleaseResponse `json:"releases"`
-}
+	if req.DisplayName != "" {
+		component.Annotations[controller.AnnotationKeyDisplayName] = req.DisplayName
+	}
+	if req.Description != "" {
+		component.Annotations[controller.AnnotationKeyDescription] = req.Description
+	}
+	if req.ComponentType != nil {
+		component.Spec.ComponentType = openchoreov1alpha1.ComponentTypeRef{
+			Kind: openchoreov1alpha1.ComponentTypeRefKind(req.ComponentType.Kind),
+			Name: req.ComponentType.Name,
+		}
+	}
+	if req.AutoDeploy != nil {
+		component.Spec.AutoDeploy = *req.AutoDeploy
+	}
+	if req.Parameters != nil {
+		component.Spec.Parameters = req.Parameters
+	}
 
-type ListReleaseBindingsResponse struct {
-	Bindings []*models.ReleaseBindingResponse `json:"bindings"`
-}
-
-type ListComponentWorkflowRunsResponse struct {
-	WorkflowRuns []models.ComponentWorkflowResponse `json:"workflowRuns"`
-}
-
-type ListComponentWorkflowsResponse struct {
-	Workflows []*models.WorkflowResponse `json:"workflows"`
-}
-
-type ListComponentTraitsResponse struct {
-	Traits []*models.ComponentTraitResponse `json:"traits"`
-}
-
-func (h *MCPHandler) CreateComponent(ctx context.Context, namespaceName, projectName string, req *models.CreateComponentRequest) (any, error) {
-	return h.Services.ComponentService.CreateComponent(ctx, namespaceName, projectName, req)
+	return h.services.ComponentService.CreateComponent(ctx, namespaceName, component)
 }
 
 func (h *MCPHandler) ListComponents(ctx context.Context, namespaceName, projectName string) (any, error) {
-	components, err := h.Services.ComponentService.ListComponents(ctx, namespaceName, projectName)
+	result, err := h.services.ComponentService.ListComponents(ctx, namespaceName, projectName, services.ListOptions{})
 	if err != nil {
-		return ListComponentsResponse{}, err
+		return nil, err
 	}
-	return ListComponentsResponse{
-		Components: components,
-	}, nil
+	return wrapList("components", result.Items), nil
 }
 
-func (h *MCPHandler) GetComponent(ctx context.Context, namespaceName, projectName, componentName string, additionalResources []string) (any, error) {
-	return h.Services.ComponentService.GetComponent(ctx, namespaceName, projectName, componentName, additionalResources)
+func (h *MCPHandler) GetComponent(
+	ctx context.Context, namespaceName, _, componentName string, _ []string,
+) (any, error) {
+	return h.services.ComponentService.GetComponent(ctx, namespaceName, componentName)
 }
 
-func (h *MCPHandler) UpdateComponentBinding(ctx context.Context, namespaceName, projectName, componentName, bindingName string, req *models.UpdateBindingRequest) (any, error) {
-	return h.Services.ComponentService.UpdateComponentBinding(ctx, namespaceName, projectName, componentName, bindingName, req)
-}
-
-func (h *MCPHandler) GetComponentObserverURL(ctx context.Context, namespaceName, projectName, componentName, environmentName string) (any, error) {
-	return h.Services.ComponentService.GetComponentObserverURL(ctx, namespaceName, projectName, componentName, environmentName)
-}
-
-func (h *MCPHandler) GetBuildObserverURL(ctx context.Context, namespaceName, projectName, componentName string) (any, error) {
-	return h.Services.ComponentService.GetBuildObserverURL(ctx, namespaceName, projectName, componentName)
-}
-
-func (h *MCPHandler) GetComponentWorkloads(ctx context.Context, namespaceName, projectName, componentName string) (any, error) {
-	return h.Services.ComponentService.GetComponentWorkloads(ctx, namespaceName, projectName, componentName)
-}
-
-func (h *MCPHandler) ListComponentReleases(ctx context.Context, namespaceName, projectName, componentName string) (any, error) {
-	releases, err := h.Services.ComponentService.ListComponentReleases(ctx, namespaceName, projectName, componentName)
+func (h *MCPHandler) GetComponentWorkloads(
+	ctx context.Context, namespaceName, _, componentName string,
+) (any, error) {
+	result, err := h.services.WorkloadService.ListWorkloads(ctx, namespaceName, componentName, services.ListOptions{})
 	if err != nil {
-		return ListComponentReleasesResponse{}, err
+		return nil, err
 	}
-	return ListComponentReleasesResponse{
-		Releases: releases,
-	}, nil
+	return wrapList("workloads", result.Items), nil
 }
 
-func (h *MCPHandler) CreateComponentRelease(ctx context.Context, namespaceName, projectName, componentName, releaseName string) (any, error) {
-	return h.Services.ComponentService.CreateComponentRelease(ctx, namespaceName, projectName, componentName, releaseName)
-}
-
-func (h *MCPHandler) GetComponentRelease(ctx context.Context, namespaceName, projectName, componentName, releaseName string) (any, error) {
-	return h.Services.ComponentService.GetComponentRelease(ctx, namespaceName, projectName, componentName, releaseName)
-}
-
-func (h *MCPHandler) ListReleaseBindings(ctx context.Context, namespaceName, projectName, componentName string, environments []string) (any, error) {
-	bindings, err := h.Services.ComponentService.ListReleaseBindings(ctx, namespaceName, projectName, componentName, environments)
+func (h *MCPHandler) ListComponentReleases(
+	ctx context.Context, namespaceName, _, componentName string,
+) (any, error) {
+	result, err := h.services.ComponentReleaseService.ListComponentReleases(ctx, namespaceName, componentName, services.ListOptions{})
 	if err != nil {
-		return ListReleaseBindingsResponse{}, err
+		return nil, err
 	}
-	return ListReleaseBindingsResponse{
-		Bindings: bindings,
-	}, nil
+	return wrapList("releases", result.Items), nil
 }
 
-func (h *MCPHandler) PatchReleaseBinding(ctx context.Context, namespaceName, projectName, componentName, bindingName string, req *models.PatchReleaseBindingRequest) (any, error) {
-	return h.Services.ComponentService.PatchReleaseBinding(ctx, namespaceName, projectName, componentName, bindingName, req)
-}
-
-func (h *MCPHandler) DeployRelease(ctx context.Context, namespaceName, projectName, componentName string, req *models.DeployReleaseRequest) (any, error) {
-	return h.Services.ComponentService.DeployRelease(ctx, namespaceName, projectName, componentName, req)
-}
-
-func (h *MCPHandler) PromoteComponent(ctx context.Context, namespaceName, projectName, componentName string, req *models.PromoteComponentRequest) (any, error) {
-	binding, err := h.Services.ComponentService.PromoteComponent(ctx, &services.PromoteComponentPayload{
-		PromoteComponentRequest: *req,
-		ComponentName:           componentName,
-		ProjectName:             projectName,
-		NamespaceName:           namespaceName,
+func (h *MCPHandler) CreateComponentRelease(
+	ctx context.Context, namespaceName, _, componentName, releaseName string,
+) (any, error) {
+	return h.services.ComponentService.GenerateRelease(ctx, namespaceName, componentName, &componentsvc.GenerateReleaseRequest{
+		ReleaseName: releaseName,
 	})
-	return binding, err
 }
 
-func (h *MCPHandler) CreateWorkload(ctx context.Context, namespaceName, projectName, componentName string, workloadSpec interface{}) (any, error) {
-	// Convert interface{} to WorkloadSpec
-	workloadSpecBytes, err := json.Marshal(workloadSpec)
+func (h *MCPHandler) GetComponentRelease(
+	ctx context.Context, namespaceName, _, _, releaseName string,
+) (any, error) {
+	return h.services.ComponentReleaseService.GetComponentRelease(ctx, namespaceName, releaseName)
+}
+
+func (h *MCPHandler) ListReleaseBindings(
+	ctx context.Context, namespaceName, _, componentName string, _ []string,
+) (any, error) {
+	result, err := h.services.ReleaseBindingService.ListReleaseBindings(ctx, namespaceName, componentName, services.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return wrapList("bindings", result.Items), nil
+}
+
+func (h *MCPHandler) PatchReleaseBinding(
+	ctx context.Context, namespaceName, _, _, bindingName string,
+	req *models.PatchReleaseBindingRequest,
+) (any, error) {
+	rb, err := h.services.ReleaseBindingService.GetReleaseBinding(ctx, namespaceName, bindingName)
+	if err != nil {
+		return nil, err
+	}
+
+	if req.ReleaseName != "" {
+		rb.Spec.ReleaseName = req.ReleaseName
+	}
+	if req.ComponentTypeEnvOverrides != nil {
+		overrideBytes, err := json.Marshal(req.ComponentTypeEnvOverrides)
+		if err != nil {
+			return nil, err
+		}
+		rb.Spec.ComponentTypeEnvOverrides = &runtime.RawExtension{Raw: overrideBytes}
+	}
+	if req.TraitOverrides != nil {
+		traitOverrides := make(map[string]runtime.RawExtension, len(req.TraitOverrides))
+		for k, v := range req.TraitOverrides {
+			overrideBytes, err := json.Marshal(v)
+			if err != nil {
+				return nil, err
+			}
+			traitOverrides[k] = runtime.RawExtension{Raw: overrideBytes}
+		}
+		rb.Spec.TraitOverrides = traitOverrides
+	}
+	if req.WorkloadOverrides != nil {
+		overrideBytes, err := json.Marshal(req.WorkloadOverrides)
+		if err != nil {
+			return nil, err
+		}
+		var wo openchoreov1alpha1.WorkloadOverrideTemplateSpec
+		if err := json.Unmarshal(overrideBytes, &wo); err != nil {
+			return nil, err
+		}
+		rb.Spec.WorkloadOverrides = &wo
+	}
+
+	return h.services.ReleaseBindingService.UpdateReleaseBinding(ctx, namespaceName, rb)
+}
+
+func (h *MCPHandler) DeployRelease(
+	ctx context.Context, namespaceName, _, componentName string, req *models.DeployReleaseRequest,
+) (any, error) {
+	return h.services.ComponentService.DeployRelease(ctx, namespaceName, componentName, &componentsvc.DeployReleaseRequest{
+		ReleaseName: req.ReleaseName,
+	})
+}
+
+func (h *MCPHandler) PromoteComponent(
+	ctx context.Context, namespaceName, _, componentName string, req *models.PromoteComponentRequest,
+) (any, error) {
+	return h.services.ComponentService.PromoteComponent(ctx, namespaceName, componentName, &componentsvc.PromoteComponentRequest{
+		SourceEnvironment: req.SourceEnvironment,
+		TargetEnvironment: req.TargetEnvironment,
+	})
+}
+
+func (h *MCPHandler) CreateWorkload(
+	ctx context.Context, namespaceName, _, componentName string, workloadSpec interface{},
+) (any, error) {
+	specBytes, err := json.Marshal(workloadSpec)
 	if err != nil {
 		return nil, err
 	}
 
 	var spec openchoreov1alpha1.WorkloadSpec
-	if err := json.Unmarshal(workloadSpecBytes, &spec); err != nil {
+	if err := json.Unmarshal(specBytes, &spec); err != nil {
 		return nil, err
 	}
 
-	return h.Services.ComponentService.CreateComponentWorkload(ctx, namespaceName, projectName, componentName, &spec)
-}
-
-func (h *MCPHandler) GetComponentSchema(ctx context.Context, namespaceName, projectName, componentName string) (any, error) {
-	return h.Services.ComponentService.GetComponentSchema(ctx, namespaceName, projectName, componentName)
-}
-
-func (h *MCPHandler) GetComponentReleaseSchema(ctx context.Context, namespaceName, projectName, componentName, releaseName string) (any, error) {
-	return h.Services.ComponentService.GetComponentReleaseSchema(ctx, namespaceName, projectName, componentName, releaseName)
-}
-
-func (h *MCPHandler) ListComponentTraits(ctx context.Context, namespaceName, projectName, componentName string) (any, error) {
-	traits, err := h.Services.ComponentService.ListComponentTraits(ctx, namespaceName, projectName, componentName)
-	if err != nil {
-		return ListComponentTraitsResponse{}, err
+	workload := &openchoreov1alpha1.Workload{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespaceName,
+		},
+		Spec: spec,
 	}
-	return ListComponentTraitsResponse{
-		Traits: traits,
-	}, nil
+
+	return h.services.WorkloadService.CreateWorkload(ctx, namespaceName, workload)
 }
 
-func (h *MCPHandler) UpdateComponentTraits(ctx context.Context, namespaceName, projectName, componentName string, req *models.UpdateComponentTraitsRequest) (any, error) {
-	return h.Services.ComponentService.UpdateComponentTraits(ctx, namespaceName, projectName, componentName, req)
+func (h *MCPHandler) GetComponentSchema(
+	ctx context.Context, namespaceName, _, componentName string,
+) (any, error) {
+	return h.services.ComponentService.GetComponentSchema(ctx, namespaceName, componentName)
 }
 
-func (h *MCPHandler) GetEnvironmentRelease(ctx context.Context, namespaceName, projectName, componentName, environmentName string) (any, error) {
-	return h.Services.ComponentService.GetEnvironmentRelease(ctx, namespaceName, projectName, componentName, environmentName)
-}
-
-func (h *MCPHandler) PatchComponent(ctx context.Context, namespaceName, projectName, componentName string, req *models.PatchComponentRequest) (any, error) {
-	return h.Services.ComponentService.PatchComponent(ctx, namespaceName, projectName, componentName, req)
-}
-
-func (h *MCPHandler) ListComponentWorkflows(ctx context.Context, namespaceName string) (any, error) {
-	workflows, err := h.Services.ComponentWorkflowService.ListComponentWorkflows(ctx, namespaceName)
+func (h *MCPHandler) GetEnvironmentRelease(
+	ctx context.Context, namespaceName, _, componentName, environmentName string,
+) (any, error) {
+	result, err := h.services.ReleaseService.ListReleases(ctx, namespaceName, componentName, environmentName, services.ListOptions{})
 	if err != nil {
-		return ListComponentWorkflowsResponse{}, err
+		return nil, err
 	}
-	return ListComponentWorkflowsResponse{
-		Workflows: workflows,
-	}, nil
+	if len(result.Items) == 0 {
+		return nil, nil
+	}
+	return result.Items[0], nil
 }
 
-func (h *MCPHandler) GetComponentWorkflowSchema(ctx context.Context, namespaceName, cwName string) (any, error) {
-	return h.Services.ComponentWorkflowService.GetComponentWorkflowSchema(ctx, namespaceName, cwName)
-}
-
-func (h *MCPHandler) TriggerComponentWorkflow(ctx context.Context, namespaceName, projectName, componentName, commit string) (any, error) {
-	return h.Services.ComponentWorkflowService.TriggerWorkflow(ctx, namespaceName, projectName, componentName, commit)
-}
-
-func (h *MCPHandler) ListComponentWorkflowRuns(ctx context.Context, namespaceName, projectName, componentName string) (any, error) {
-	workflowRuns, err := h.Services.ComponentWorkflowService.ListComponentWorkflowRuns(ctx, namespaceName, projectName, componentName)
+func (h *MCPHandler) PatchComponent(
+	ctx context.Context, namespaceName, _, componentName string, req *models.PatchComponentRequest,
+) (any, error) {
+	component, err := h.services.ComponentService.GetComponent(ctx, namespaceName, componentName)
 	if err != nil {
-		return ListComponentWorkflowRunsResponse{}, err
+		return nil, err
 	}
-	return ListComponentWorkflowRunsResponse{
-		WorkflowRuns: workflowRuns,
-	}, nil
-}
 
-func (h *MCPHandler) UpdateComponentWorkflowSchema(ctx context.Context, namespaceName, projectName, componentName string, req *models.UpdateComponentWorkflowRequest) (any, error) {
-	return h.Services.ComponentService.UpdateComponentWorkflowSchema(ctx, namespaceName, projectName, componentName, req)
+	if req.AutoDeploy != nil {
+		component.Spec.AutoDeploy = *req.AutoDeploy
+	}
+	if req.Parameters != nil {
+		component.Spec.Parameters = req.Parameters
+	}
+
+	return h.services.ComponentService.UpdateComponent(ctx, namespaceName, component)
 }

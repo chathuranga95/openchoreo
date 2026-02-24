@@ -108,39 +108,6 @@ func infrastructureToolSpecs() []toolTestSpec {
 			},
 		},
 		{
-			name:                "list_workflows",
-			toolset:             "infrastructure",
-			descriptionKeywords: []string{"list", "workflow"},
-			descriptionMinLen:   10,
-			requiredParams:      []string{"namespace_name"},
-			testArgs: map[string]any{
-				"namespace_name": testNamespaceName,
-			},
-			expectedMethod: "ListWorkflows",
-			validateCall: func(t *testing.T, args []interface{}) {
-				if args[0] != testNamespaceName {
-					t.Errorf("Expected namespace %q, got %v", testNamespaceName, args[0])
-				}
-			},
-		},
-		{
-			name:                "get_workflow_schema",
-			toolset:             "infrastructure",
-			descriptionKeywords: []string{"workflow", "schema"},
-			descriptionMinLen:   10,
-			requiredParams:      []string{"namespace_name", "workflow_name"},
-			testArgs: map[string]any{
-				"namespace_name": testNamespaceName,
-				"workflow_name":  "workflow-1",
-			},
-			expectedMethod: "GetWorkflowSchema",
-			validateCall: func(t *testing.T, args []interface{}) {
-				if args[0] != testNamespaceName || args[1] != "workflow-1" {
-					t.Errorf("Expected (%s, workflow-1), got (%v, %v)", testNamespaceName, args[0], args[1])
-				}
-			},
-		},
-		{
 			name:                "list_traits",
 			toolset:             "infrastructure",
 			descriptionKeywords: []string{"list", "trait"},
@@ -235,39 +202,6 @@ func infrastructureToolSpecs() []toolTestSpec {
 			validateCall: func(t *testing.T, args []interface{}) {
 				if args[0] != testNamespaceName {
 					t.Errorf("Expected namespace %q, got %v", testNamespaceName, args[0])
-				}
-			},
-		},
-		{
-			name:                "list_component_workflows_org_level",
-			toolset:             "infrastructure",
-			descriptionKeywords: []string{"list", "workflow", "component"},
-			descriptionMinLen:   10,
-			requiredParams:      []string{"namespace_name"},
-			testArgs: map[string]any{
-				"namespace_name": testNamespaceName,
-			},
-			expectedMethod: "ListComponentWorkflows",
-			validateCall: func(t *testing.T, args []interface{}) {
-				if args[0] != testNamespaceName {
-					t.Errorf("Expected namespace %q, got %v", testNamespaceName, args[0])
-				}
-			},
-		},
-		{
-			name:                "get_component_workflow_schema_org_level",
-			toolset:             "infrastructure",
-			descriptionKeywords: []string{"schema", "workflow", "component"},
-			descriptionMinLen:   10,
-			requiredParams:      []string{"namespace_name", "cw_name"},
-			testArgs: map[string]any{
-				"namespace_name": testNamespaceName,
-				"cw_name":        "build-workflow",
-			},
-			expectedMethod: "GetComponentWorkflowSchema",
-			validateCall: func(t *testing.T, args []interface{}) {
-				if args[0] != testNamespaceName || args[1] != "build-workflow" {
-					t.Errorf("Expected (%s, build-workflow), got (%v, %v)", testNamespaceName, args[0], args[1])
 				}
 			},
 		},

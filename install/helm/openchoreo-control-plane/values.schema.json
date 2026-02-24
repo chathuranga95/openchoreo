@@ -2468,11 +2468,7 @@
                     "namespace",
                     "project",
                     "component",
-                    "build",
-                    "deployment",
-                    "infrastructure",
-                    "schema",
-                    "resource"
+                    "infrastructure"
                   ],
                   "description": "List of enabled MCP toolsets. Each toolset exposes a group of related operations.",
                   "items": {

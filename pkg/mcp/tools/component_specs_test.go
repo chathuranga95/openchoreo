@@ -18,7 +18,6 @@ func componentToolSpecs() []toolTestSpec {
 	specs = append(specs, componentReleaseSpecs()...)
 	specs = append(specs, componentBindingSpecs()...)
 	specs = append(specs, componentSchemaSpecs()...)
-	specs = append(specs, componentWorkflowSpecs()...)
 	return specs
 }
 
@@ -73,28 +72,6 @@ func componentBasicSpecs() []toolTestSpec {
 				expected := []string{"deployments", "services"}
 				if diff := cmp.Diff(expected, resources); diff != "" {
 					t.Errorf("additional_resources mismatch (-want +got):\n%s", diff)
-				}
-			},
-		},
-		{
-			name:                "get_component_observer_url",
-			toolset:             "component",
-			descriptionKeywords: []string{"observability", "component"},
-			descriptionMinLen:   10,
-			requiredParams:      []string{"namespace_name", "project_name", "component_name", "environment_name"},
-			testArgs: map[string]any{
-				"namespace_name":   testNamespaceName,
-				"project_name":     testProjectName,
-				"component_name":   testComponentName,
-				"environment_name": testEnvName,
-			},
-			expectedMethod: "GetComponentObserverURL",
-			validateCall: func(t *testing.T, args []interface{}) {
-				if args[0] != testNamespaceName || args[1] != testProjectName ||
-					args[2] != testComponentName || args[3] != testEnvName {
-					t.Errorf("Expected (%s, %s, %s, %s), got (%v, %v, %v, %v)",
-						testNamespaceName, testProjectName, testComponentName, testEnvName,
-						args[0], args[1], args[2], args[3])
 				}
 			},
 		},
@@ -347,30 +324,6 @@ func componentBindingSpecs() []toolTestSpec {
 				}
 			},
 		},
-		{
-			name:                "update_component_binding",
-			toolset:             "component",
-			descriptionKeywords: []string{"update", "component", "binding"},
-			descriptionMinLen:   10,
-			requiredParams:      []string{"namespace_name", "project_name", "component_name", "binding_name", "release_state"},
-			testArgs: map[string]any{
-				"namespace_name": testNamespaceName,
-				"project_name":   testProjectName,
-				"component_name": testComponentName,
-				"binding_name":   "binding-1",
-				"release_state":  "Active",
-			},
-			expectedMethod: "UpdateComponentBinding",
-			validateCall: func(t *testing.T, args []interface{}) {
-				if args[0] != testNamespaceName || args[1] != testProjectName ||
-					args[2] != testComponentName || args[3] != "binding-1" {
-					t.Errorf("Expected (%s, %s, %s, binding-1), got (%v, %v, %v, %v)",
-						testNamespaceName, testProjectName, testComponentName,
-						args[0], args[1], args[2], args[3])
-				}
-				// args[4] is *models.UpdateBindingRequest
-			},
-		},
 	}
 }
 
@@ -397,73 +350,6 @@ func componentSchemaSpecs() []toolTestSpec {
 			},
 		},
 		{
-			name:                "get_component_release_schema",
-			toolset:             "component",
-			descriptionKeywords: []string{"schema", "release"},
-			descriptionMinLen:   10,
-			requiredParams:      []string{"namespace_name", "project_name", "component_name", "release_name"},
-			testArgs: map[string]any{
-				"namespace_name": testNamespaceName,
-				"project_name":   testProjectName,
-				"component_name": testComponentName,
-				"release_name":   testReleaseName,
-			},
-			expectedMethod: "GetComponentReleaseSchema",
-			validateCall: func(t *testing.T, args []interface{}) {
-				if args[0] != testNamespaceName || args[1] != testProjectName ||
-					args[2] != testComponentName || args[3] != testReleaseName {
-					t.Errorf("Expected (%s, %s, %s, %s), got (%v, %v, %v, %v)",
-						testNamespaceName, testProjectName, testComponentName, testReleaseName,
-						args[0], args[1], args[2], args[3])
-				}
-			},
-		},
-		{
-			name:                "list_component_traits",
-			toolset:             "component",
-			descriptionKeywords: []string{"list", "trait", "component"},
-			descriptionMinLen:   10,
-			requiredParams:      []string{"namespace_name", "project_name", "component_name"},
-			testArgs: map[string]any{
-				"namespace_name": testNamespaceName,
-				"project_name":   testProjectName,
-				"component_name": testComponentName,
-			},
-			expectedMethod: "ListComponentTraits",
-			validateCall: func(t *testing.T, args []interface{}) {
-				if args[0] != testNamespaceName || args[1] != testProjectName || args[2] != testComponentName {
-					t.Errorf("Expected (%s, %s, %s), got (%v, %v, %v)",
-						testNamespaceName, testProjectName, testComponentName, args[0], args[1], args[2])
-				}
-			},
-		},
-		{
-			name:                "update_component_traits",
-			toolset:             "component",
-			descriptionKeywords: []string{"update", "trait", "component"},
-			descriptionMinLen:   10,
-			requiredParams:      []string{"namespace_name", "project_name", "component_name", "traits"},
-			testArgs: map[string]any{
-				"namespace_name": testNamespaceName,
-				"project_name":   testProjectName,
-				"component_name": testComponentName,
-				"traits": []interface{}{
-					map[string]interface{}{
-						"name":         "autoscaling",
-						"instanceName": "hpa-1",
-						"parameters":   map[string]interface{}{"minReplicas": float64(2)},
-					},
-				},
-			},
-			expectedMethod: "UpdateComponentTraits",
-			validateCall: func(t *testing.T, args []interface{}) {
-				if args[0] != testNamespaceName || args[1] != testProjectName || args[2] != testComponentName {
-					t.Errorf("Expected (%s, %s, %s), got (%v, %v, %v)",
-						testNamespaceName, testProjectName, testComponentName, args[0], args[1], args[2])
-				}
-			},
-		},
-		{
 			name:                "get_environment_release",
 			toolset:             "component",
 			descriptionKeywords: []string{"release", "environment"},
@@ -482,111 +368,6 @@ func componentSchemaSpecs() []toolTestSpec {
 					t.Errorf("Expected (%s, %s, %s, %s), got (%v, %v, %v, %v)",
 						testNamespaceName, testProjectName, testComponentName, testEnvName,
 						args[0], args[1], args[2], args[3])
-				}
-			},
-		},
-	}
-}
-
-// componentWorkflowSpecs returns component workflow operation specs
-func componentWorkflowSpecs() []toolTestSpec {
-	return []toolTestSpec{
-		{
-			name:                "list_component_workflows",
-			toolset:             "component",
-			descriptionKeywords: []string{"list", "workflow", "component"},
-			descriptionMinLen:   10,
-			requiredParams:      []string{"namespace_name"},
-			testArgs: map[string]any{
-				"namespace_name": testNamespaceName,
-			},
-			expectedMethod: "ListComponentWorkflows",
-			validateCall: func(t *testing.T, args []interface{}) {
-				if args[0] != testNamespaceName {
-					t.Errorf("Expected namespace %q, got %v", testNamespaceName, args[0])
-				}
-			},
-		},
-		{
-			name:                "get_component_workflow_schema",
-			toolset:             "component",
-			descriptionKeywords: []string{"schema", "workflow", "component"},
-			descriptionMinLen:   10,
-			requiredParams:      []string{"namespace_name", "cwName"},
-			testArgs: map[string]any{
-				"namespace_name": testNamespaceName,
-				"cwName":         "build-workflow",
-			},
-			expectedMethod: "GetComponentWorkflowSchema",
-			validateCall: func(t *testing.T, args []interface{}) {
-				if args[0] != testNamespaceName || args[1] != "build-workflow" {
-					t.Errorf("Expected (%s, build-workflow), got (%v, %v)", testNamespaceName, args[0], args[1])
-				}
-			},
-		},
-		{
-			name:                "trigger_component_workflow",
-			toolset:             "component",
-			descriptionKeywords: []string{"trigger", "workflow", "component"},
-			descriptionMinLen:   10,
-			requiredParams:      []string{"namespace_name", "project_name", "component_name"},
-			optionalParams:      []string{"commit"},
-			testArgs: map[string]any{
-				"namespace_name": testNamespaceName,
-				"project_name":   testProjectName,
-				"component_name": testComponentName,
-				"commit":         "abc1234",
-			},
-			expectedMethod: "TriggerComponentWorkflow",
-			validateCall: func(t *testing.T, args []interface{}) {
-				if args[0] != testNamespaceName || args[1] != testProjectName || args[2] != testComponentName {
-					t.Errorf("Expected (%s, %s, %s), got (%v, %v, %v)",
-						testNamespaceName, testProjectName, testComponentName, args[0], args[1], args[2])
-				}
-			},
-		},
-		{
-			name:                "list_component_workflow_runs",
-			toolset:             "component",
-			descriptionKeywords: []string{"list", "workflow", "run", "component"},
-			descriptionMinLen:   10,
-			requiredParams:      []string{"namespace_name", "project_name", "component_name"},
-			testArgs: map[string]any{
-				"namespace_name": testNamespaceName,
-				"project_name":   testProjectName,
-				"component_name": testComponentName,
-			},
-			expectedMethod: "ListComponentWorkflowRuns",
-			validateCall: func(t *testing.T, args []interface{}) {
-				if args[0] != testNamespaceName || args[1] != testProjectName || args[2] != testComponentName {
-					t.Errorf("Expected (%s, %s, %s), got (%v, %v, %v)",
-						testNamespaceName, testProjectName, testComponentName, args[0], args[1], args[2])
-				}
-			},
-		},
-		{
-			name:                "update_component_workflow_schema",
-			toolset:             "component",
-			descriptionKeywords: []string{"update", "workflow", "schema", "component"},
-			descriptionMinLen:   10,
-			requiredParams:      []string{"namespace_name", "project_name", "component_name"},
-			optionalParams:      []string{"system_parameters", "parameters"},
-			testArgs: map[string]any{
-				"namespace_name": testNamespaceName,
-				"project_name":   testProjectName,
-				"component_name": testComponentName,
-				"system_parameters": map[string]interface{}{
-					"repository": map[string]interface{}{
-						"url":     "https://github.com/example/repo",
-						"appPath": "/app",
-					},
-				},
-			},
-			expectedMethod: "UpdateComponentWorkflowSchema",
-			validateCall: func(t *testing.T, args []interface{}) {
-				if args[0] != testNamespaceName || args[1] != testProjectName || args[2] != testComponentName {
-					t.Errorf("Expected (%s, %s, %s), got (%v, %v, %v)",
-						testNamespaceName, testProjectName, testComponentName, args[0], args[1], args[2])
 				}
 			},
 		},
