@@ -1,0 +1,344 @@
+# Copyright 2026 The OpenChoreo Authors
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: openchoreo.dev/v1alpha1
+kind: Trait
+metadata:
+  name: versioned-http-route
+  namespace: default
+spec:
+  parameters:
+    openAPIV3Schema:
+      type: object
+      required:
+        - hostname
+        - version
+      properties:
+        hostname:
+          type: string
+          pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$"
+        version:
+          type: string
+          pattern: "^v[0-9]+$"
+  validations:
+    - rule: ${size(workload.endpoints.transformMap(name, ep, "external" in ep.visibility && ep.type in ["HTTP", "GraphQL", "Websocket"], ep)) == 1}
+      message: The versioned-http-route trait expects exactly one external HTTP, GraphQL, or Websocket endpoint.
+  patches:
+    - targetPlane: dataplane
+      forEach: ${workload.endpoints.transformMap(name, ep, "external" in ep.visibility && ep.type in ["HTTP", "GraphQL", "Websocket"], ep)}
+      var: endpoint
+      target:
+        group: gateway.networking.k8s.io
+        version: v1
+        kind: HTTPRoute
+        where: ${resource.metadata.labels["openchoreo.dev/endpoint-name"] == endpoint.key && resource.metadata.labels["openchoreo.dev/endpoint-visibility"] == "external"}
+      operations:
+        - op: replace
+          path: /spec/hostnames
+          value:
+            - ${parameters.hostname}
+        - op: replace
+          path: /spec/rules/0/matches/0/path/value
+          value: /${parameters.version}
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: ComponentType
+metadata:
+  name: versioned-service
+  namespace: default
+spec:
+  workloadType: deployment
+  allowedTraits:
+    - kind: Trait
+      name: versioned-http-route
+    - kind: ClusterTrait
+      name: observability-alert-rule
+  allowedWorkflows:
+    - kind: ClusterWorkflow
+      name: paketo-buildpacks-builder
+    - kind: ClusterWorkflow
+      name: gcp-buildpacks-builder
+    - kind: ClusterWorkflow
+      name: dockerfile-builder
+    - kind: ClusterWorkflow
+      name: ballerina-buildpack-builder
+  environmentConfigs:
+    openAPIV3Schema:
+      type: object
+      $defs:
+        ResourceQuantity:
+          type: object
+          default: {}
+          properties:
+            cpu:
+              type: string
+              default: 100m
+            memory:
+              type: string
+              default: 256Mi
+        ResourceRequirements:
+          type: object
+          default: {}
+          properties:
+            limits:
+              $ref: '#/$defs/ResourceQuantity'
+            requests:
+              $ref: '#/$defs/ResourceQuantity'
+      properties:
+        imagePullPolicy:
+          type: string
+          default: IfNotPresent
+          enum:
+            - Always
+            - IfNotPresent
+            - Never
+        replicas:
+          type: integer
+          default: 1
+          minimum: 0
+        resources:
+          $ref: '#/$defs/ResourceRequirements'
+  validations:
+    - rule: ${size(workload.endpoints) > 0}
+      message: Service components must have at least one endpoint. Use deployment/worker for components without endpoints.
+    - rule: |-
+        ${workload.endpoints.exists(name, ep, "external" in ep.visibility)
+          ? has(gateway.ingress) && has(gateway.ingress.external)
+          : true}
+      message: Endpoints with external visibility require gateway.ingress.external to be configured on the Environment or DataPlane.
+    - rule: |-
+        ${workload.endpoints.exists(name, ep, "internal" in ep.visibility)
+          ? has(gateway.ingress) && has(gateway.ingress.internal)
+          : true}
+      message: Endpoints with internal visibility require gateway.ingress.internal to be configured on the Environment or DataPlane.
+  resources:
+    - id: deployment
+      targetPlane: dataplane
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${metadata.name}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          replicas: ${environmentConfigs.replicas}
+          selector:
+            matchLabels: ${metadata.podSelectors}
+          template:
+            metadata:
+              labels: ${metadata.podSelectors}
+            spec:
+              containers:
+                - name: main
+                  image: ${workload.container.image}
+                  imagePullPolicy: ${environmentConfigs.imagePullPolicy}
+                  command: |
+                    ${has(workload.container.command) ? workload.container.command : oc_omit()}
+                  args: |
+                    ${has(workload.container.args) ? workload.container.args : oc_omit()}
+                  env: ${dependencies.toContainerEnvs()}
+                  envFrom: ${configurations.toContainerEnvFrom()}
+                  resources:
+                    limits:
+                      cpu: ${environmentConfigs.resources.limits.cpu}
+                      memory: ${environmentConfigs.resources.limits.memory}
+                    requests:
+                      cpu: ${environmentConfigs.resources.requests.cpu}
+                      memory: ${environmentConfigs.resources.requests.memory}
+                  volumeMounts: ${configurations.toContainerVolumeMounts() + dependencies.toContainerVolumeMounts()}
+              volumes: ${configurations.toVolumes() + dependencies.toVolumes()}
+    - id: service
+      targetPlane: dataplane
+      includeWhen: ${size(workload.endpoints) > 0}
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${metadata.componentName}
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        spec:
+          type: ClusterIP
+          selector: ${metadata.podSelectors}
+          ports: ${workload.toServicePorts()}
+    - id: httproute-external
+      targetPlane: dataplane
+      forEach: ${workload.endpoints.transformMap(name, ep, "external" in ep.visibility && ep.type in ["HTTP", "GraphQL", "Websocket"], ep)}
+      var: endpoint
+      template:
+        apiVersion: gateway.networking.k8s.io/v1
+        kind: HTTPRoute
+        metadata:
+          name: ${oc_generate_name(metadata.componentName, endpoint.key)}
+          namespace: ${metadata.namespace}
+          labels: '${oc_merge(metadata.labels, {"openchoreo.dev/endpoint-name": endpoint.key, "openchoreo.dev/endpoint-visibility": "external"})}'
+        spec:
+          hostnames: |
+            ${[gateway.ingress.external.?http, gateway.ingress.external.?https]
+              .filter(g, g.hasValue()).map(g, g.value().host).distinct()
+              .map(h, metadata.environmentName + "-" + metadata.componentNamespace + "." + h)}
+          parentRefs:
+            - name: ${gateway.ingress.external.name}
+              namespace: ${gateway.ingress.external.namespace}
+          rules:
+            - matches:
+                - path:
+                    type: PathPrefix
+                    value: /${metadata.componentName}-${endpoint.key}
+              filters:
+                - type: URLRewrite
+                  urlRewrite:
+                    path:
+                      type: ReplacePrefixMatch
+                      replacePrefixMatch: ${endpoint.value.?basePath.orValue("/")}
+              backendRefs:
+                - name: ${metadata.componentName}
+                  port: ${endpoint.value.port}
+    - id: httproute-internal
+      targetPlane: dataplane
+      forEach: ${workload.endpoints.transformMap(name, ep, "internal" in ep.visibility && ep.type in ["HTTP", "GraphQL", "Websocket"], ep)}
+      var: endpoint
+      template:
+        apiVersion: gateway.networking.k8s.io/v1
+        kind: HTTPRoute
+        metadata:
+          name: ${oc_generate_name(metadata.componentName, endpoint.key, "internal")}
+          namespace: ${metadata.namespace}
+          labels: '${oc_merge(metadata.labels, {"openchoreo.dev/endpoint-name": endpoint.key, "openchoreo.dev/endpoint-visibility": "internal"})}'
+        spec:
+          hostnames: |
+            ${[gateway.ingress.internal.?http, gateway.ingress.internal.?https]
+              .filter(g, g.hasValue()).map(g, g.value().host).distinct()
+              .map(h, metadata.environmentName + "-" + metadata.componentNamespace + "." + h)}
+          parentRefs:
+            - name: ${gateway.ingress.internal.name}
+              namespace: ${gateway.ingress.internal.namespace}
+          rules:
+            - matches:
+                - path:
+                    type: PathPrefix
+                    value: /${metadata.componentName}-${endpoint.key}
+              filters:
+                - type: URLRewrite
+                  urlRewrite:
+                    path:
+                      type: ReplacePrefixMatch
+                      replacePrefixMatch: ${endpoint.value.?basePath.orValue("/")}
+              backendRefs:
+                - name: ${metadata.componentName}
+                  port: ${endpoint.value.port}
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: Component
+metadata:
+  name: greeter-b-v1
+  namespace: default
+spec:
+  owner:
+    projectName: default
+  componentType:
+    kind: ComponentType
+    name: deployment/versioned-service
+  autoDeploy: false
+  autoBuild: false
+  traits:
+    - kind: Trait
+      name: versioned-http-route
+      instanceName: public-versioned-route
+      parameters:
+        hostname: greeter.openchoreoapis.localhost
+        version: v1
+  workflow:
+    kind: ClusterWorkflow
+    name: dockerfile-builder
+    parameters:
+      repository:
+        url: https://github.com/chathuranga95/docker-go-greeter
+        revision:
+          branch: main
+          commit: 541549ce96fa41719a272183defcc3184633ed47
+        appPath: .
+      docker:
+        context: .
+        filePath: Dockerfile
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: WorkflowRun
+metadata:
+  name: greeter-b-v1-build-541549ce
+  namespace: default
+  labels:
+    openchoreo.dev/project: default
+    openchoreo.dev/component: greeter-b-v1
+spec:
+  workflow:
+    kind: ClusterWorkflow
+    name: dockerfile-builder
+    parameters:
+      repository:
+        url: https://github.com/chathuranga95/docker-go-greeter
+        revision:
+          branch: main
+          commit: 541549ce96fa41719a272183defcc3184633ed47
+        appPath: .
+      docker:
+        context: .
+        filePath: Dockerfile
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: Component
+metadata:
+  name: greeter-b-v2
+  namespace: default
+spec:
+  owner:
+    projectName: default
+  componentType:
+    kind: ComponentType
+    name: deployment/versioned-service
+  autoDeploy: false
+  autoBuild: false
+  traits:
+    - kind: Trait
+      name: versioned-http-route
+      instanceName: public-versioned-route
+      parameters:
+        hostname: greeter.openchoreoapis.localhost
+        version: v2
+  workflow:
+    kind: ClusterWorkflow
+    name: dockerfile-builder
+    parameters:
+      repository:
+        url: https://github.com/chathuranga95/docker-go-greeter
+        revision:
+          branch: experimental
+          commit: c9b18e332300eb58bf7883d5723d37279b9245c4
+        appPath: .
+      docker:
+        context: .
+        filePath: Dockerfile
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: WorkflowRun
+metadata:
+  name: greeter-b-v2-build-c9b18e33
+  namespace: default
+  labels:
+    openchoreo.dev/project: default
+    openchoreo.dev/component: greeter-b-v2
+spec:
+  workflow:
+    kind: ClusterWorkflow
+    name: dockerfile-builder
+    parameters:
+      repository:
+        url: https://github.com/chathuranga95/docker-go-greeter
+        revision:
+          branch: experimental
+          commit: c9b18e332300eb58bf7883d5723d37279b9245c4
+        appPath: .
+      docker:
+        context: .
+        filePath: Dockerfile

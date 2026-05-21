@@ -1,0 +1,99 @@
+apiVersion: openchoreo.dev/v1alpha1
+kind: Workload
+metadata:
+  name: docker-go-greeter-v1-workload
+  namespace: default
+spec:
+  owner:
+    projectName: default
+    componentName: docker-go-greeter-v1
+  container:
+    image: host.k3d.internal:10082/default-default-docker-go-greeter-v1:v1-541549ce
+  endpoints:
+    greeter:
+      type: HTTP
+      port: 9090
+      targetPort: 9090
+      basePath: /
+      visibility:
+        - external
+      schema:
+        type: openapi
+        content: |-
+          openapi: "3.0.0"
+          info:
+            title: Greeting Service
+            version: 1.0.0
+          paths:
+            /greeter/greet:
+              get:
+                summary: Greet a person
+                description: Greet a person by name
+                tags:
+                  - greeting
+                parameters:
+                  - name: name
+                    in: query
+                    description: Name of the person to greet
+                    required: false
+                    schema:
+                      type: string
+                responses:
+                  '200':
+                    description: Successful response
+                    content:
+                      text/plain:
+                        schema:
+                          type: string
+                deprecated: false
+                security: []
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: Workload
+metadata:
+  name: docker-go-greeter-v2-workload
+  namespace: default
+spec:
+  owner:
+    projectName: default
+    componentName: docker-go-greeter-v2
+  container:
+    image: host.k3d.internal:10082/default-default-docker-go-greeter-v2:v1-c9b18e33
+  endpoints:
+    greeter:
+      type: HTTP
+      port: 9090
+      targetPort: 9090
+      basePath: /
+      visibility:
+        - external
+      schema:
+        type: openapi
+        content: |-
+          openapi: "3.0.0"
+          info:
+            title: Greeting Service
+            version: 1.0.0
+          paths:
+            /greeter/greet:
+              get:
+                summary: Greet a person
+                description: Greet a person by name
+                tags:
+                  - greeting
+                parameters:
+                  - name: name
+                    in: query
+                    description: Name of the person to greet
+                    required: false
+                    schema:
+                      type: string
+                responses:
+                  '200':
+                    description: Successful response
+                    content:
+                      text/plain:
+                        schema:
+                          type: string
+                deprecated: false
+                security: []

@@ -1,0 +1,61 @@
+apiVersion: openchoreo.dev/v1alpha1
+kind: Component
+metadata:
+  name: docker-go-greeter-v1
+  namespace: default
+spec:
+  owner:
+    projectName: default
+  componentType:
+    kind: ComponentType
+    name: deployment/greeter-versioned-service
+  autoDeploy: true
+  autoBuild: false
+  parameters:
+    version: v1
+    pathPrefix: /v1
+    hostname: docker-go-greeter.openchoreoapis.localhost
+  workflow:
+    kind: ClusterWorkflow
+    name: dockerfile-builder
+    parameters:
+      repository:
+        url: https://github.com/chathuranga95/docker-go-greeter
+        revision:
+          branch: main
+          commit: 541549ce96fa41719a272183defcc3184633ed47
+        appPath: .
+      docker:
+        context: .
+        filePath: Dockerfile
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: Component
+metadata:
+  name: docker-go-greeter-v2
+  namespace: default
+spec:
+  owner:
+    projectName: default
+  componentType:
+    kind: ComponentType
+    name: deployment/greeter-versioned-service
+  autoDeploy: true
+  autoBuild: false
+  parameters:
+    version: v2
+    pathPrefix: /v2
+    hostname: docker-go-greeter.openchoreoapis.localhost
+  workflow:
+    kind: ClusterWorkflow
+    name: dockerfile-builder
+    parameters:
+      repository:
+        url: https://github.com/chathuranga95/docker-go-greeter
+        revision:
+          branch: experimental
+          commit: c9b18e332300eb58bf7883d5723d37279b9245c4
+        appPath: .
+      docker:
+        context: .
+        filePath: Dockerfile
