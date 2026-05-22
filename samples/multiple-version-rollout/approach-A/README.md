@@ -22,8 +22,8 @@ That means these two Components:
 
 resolve as:
 
-- `http://docker-go-greeter.openchoreoapis.localhost:19080/v1/greeter/greet?name=Codex`
-- `http://docker-go-greeter.openchoreoapis.localhost:19080/v2/greeter/greet?name=Codex`
+- `http://docker-go-greeter.openchoreoapis.localhost:19080/v1/greeter/greet?name=John`
+- `http://docker-go-greeter.openchoreoapis.localhost:19080/v2/greeter/greet?name=John`
 
 ## Trade-Off
 
@@ -33,8 +33,10 @@ For a more reusable versioning concern, see `../approach-B`, where a generic Com
 
 ## How to run
 
+Apply the following commands in the given order
+
 ```bash
-kubectl apply -f samples/versioning/approach-A/01-docker-go-greeter.yaml
+kubectl apply -f samples/multiple-version-rollout/approach-A/01-docker-go-greeter.yaml
 
 kubectl wait --for=condition=WorkflowSucceeded \
   workflowrun \
@@ -46,6 +48,6 @@ kubectl wait --for=condition=WorkflowSucceeded \
   -l openchoreo.dev/component=docker-go-greeter-v2 \
   -n default --timeout=20m
 
-kubectl apply -f samples/versioning/approach-A/02-workloads.yaml
-kubectl apply -f samples/versioning/approach-A/03-enable-auto-deploy.yaml
+kubectl apply -f samples/multiple-version-rollout/approach-A/02-workloads.yaml
+kubectl apply -f samples/multiple-version-rollout/approach-A/03-enable-auto-deploy.yaml
 ```

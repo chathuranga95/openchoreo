@@ -19,8 +19,8 @@ That means these two components:
 
 resolve as:
 
-- `http://greeter.openchoreoapis.localhost:19080/v1/greeter/greet?name=Codex`
-- `http://greeter.openchoreoapis.localhost:19080/v2/greeter/greet?name=Codex`
+- `http://greeter.openchoreoapis.localhost:19080/v1/greeter/greet?name=John`
+- `http://greeter.openchoreoapis.localhost:19080/v2/greeter/greet?name=John`
 
 The same Trait can be reused for other service families:
 
@@ -29,8 +29,10 @@ The same Trait can be reused for other service families:
 
 ## How to run
 
+Apply the following commands in the given order
+
 ```bash
-kubectl apply -f samples/versioning/approach-B/01-greeter.yaml
+kubectl apply -f samples/multiple-version-rollout/approach-B/01-greeter.yaml
 
 kubectl wait --for=condition=WorkflowSucceeded \
   workflowrun \
@@ -42,6 +44,6 @@ kubectl wait --for=condition=WorkflowSucceeded \
   -l openchoreo.dev/component=greeter-b-v2 \
   -n default --timeout=20m
 
-kubectl apply -f samples/versioning/approach-B/02-workloads.yaml
-kubectl apply -f samples/versioning/approach-B/03-enable-auto-deploy.yaml
+kubectl apply -f samples/multiple-version-rollout/approach-B/02-workloads.yaml
+kubectl apply -f samples/multiple-version-rollout/approach-B/03-enable-auto-deploy.yaml
 ```
