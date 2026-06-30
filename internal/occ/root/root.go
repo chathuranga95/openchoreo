@@ -24,6 +24,7 @@ import (
 	"github.com/openchoreo/openchoreo/internal/occ/cmd/config"
 	"github.com/openchoreo/openchoreo/internal/occ/cmd/dataplane"
 	"github.com/openchoreo/openchoreo/internal/occ/cmd/deploymentpipeline"
+	"github.com/openchoreo/openchoreo/internal/occ/cmd/dev"
 	"github.com/openchoreo/openchoreo/internal/occ/cmd/environment"
 	"github.com/openchoreo/openchoreo/internal/occ/cmd/login"
 	"github.com/openchoreo/openchoreo/internal/occ/cmd/logout"
@@ -64,6 +65,7 @@ func BuildRootCmd() *cobra.Command {
 		login.NewLoginCmd(),
 		logout.NewLogoutCmd(),
 		config.NewConfigCmd(),
+		dev.NewDevCmd(),
 		version.NewVersionCmd(),
 		componentrelease.NewComponentReleaseCmd(f),
 		resourcerelease.NewResourceReleaseCmd(f),
