@@ -19,6 +19,10 @@ spec:
       labels:
         app: cluster-agent
         app.kubernetes.io/component: cluster-agent
+        # Marks the agent as a system component so per-component NetworkPolicies
+        # (which allow ingress from openchoreo.dev/system-component pods) permit
+        # the L4 dependency tunnel to dial component service ports.
+        openchoreo.dev/system-component: cluster-agent
         {{- include "openchoreo-data-plane.selectorLabels" . | nindent 8 }}
       {{- with .Values.clusterAgent.podAnnotations }}
       annotations:
