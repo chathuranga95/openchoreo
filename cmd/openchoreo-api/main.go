@@ -258,14 +258,24 @@ func main() {
 		)
 		authedWirelogsHandler := jwtMiddleware(wirelogsHandler)
 
+		// Resolve-dependencies handler: maps a workload's connections to their
+		// in-cluster endpoint addresses for `occ dev connect`. Authz reuses
+		// component:view at the target-component scope.
+		resolveDepsAuthzChecker := svcpkg.NewAuthzChecker(runtime.pdp, logger.With("component", "resolve-deps-authz"))
+		resolveDepsHandler := openapihandlers.NewResolveDependenciesHandler(k8sClient, resolveDepsAuthzChecker, logger)
+		authedResolveDepsHandler := jwtMiddleware(resolveDepsHandler)
+
 		topMux := http.NewServeMux()
 		topMux.Handle("/exec/", authedExecHandler)
 		topMux.Handle("GET /api/v1/namespaces/{namespace}/environments/{environment}/wirelogs", authedWirelogsHandler)
+		topMux.Handle("POST /api/v1/namespaces/{namespace}/dependencies/resolve", authedResolveDepsHandler)
 		topMux.Handle("/", handler)
 		topHandler = topMux
 		logger.Info("Exec endpoint registered", "path", "/exec/namespaces/{ns}/components/{name}")
 		logger.Info("Wirelogs endpoint registered",
 			"path", "/api/v1/namespaces/{namespace}/environments/{environment}/wirelogs")
+		logger.Info("Resolve-dependencies endpoint registered",
+			"path", "/api/v1/namespaces/{namespace}/dependencies/resolve")
 	}
 
 	// Create server from configuration
