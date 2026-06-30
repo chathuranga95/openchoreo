@@ -160,60 +160,74 @@ func (h *ResolveDependenciesHandler) resolveOne(
 	namespace, project, environment string,
 	conn openchoreov1alpha1.WorkloadConnection,
 ) (*resolvedDependency, *pendingDependency) {
-	pending := func(reason string) *pendingDependency {
-		return &pendingDependency{Project: project, Component: conn.Component, Endpoint: conn.Name, Reason: reason}
+	ep, reason := lookupProviderEndpoint(ctx, h.k8sClient, namespace, project, conn.Component, conn.Name, environment)
+	if ep == nil {
+		return nil, &pendingDependency{Project: project, Component: conn.Component, Endpoint: conn.Name, Reason: reason}
 	}
+	url := ep.ServiceURL
+	return &resolvedDependency{
+		Project:     project,
+		Component:   conn.Component,
+		Endpoint:    conn.Name,
+		Visibility:  conn.Visibility,
+		Type:        string(ep.Type),
+		Scheme:      url.Scheme,
+		Host:        url.Host,
+		Port:        url.Port,
+		Path:        url.Path,
+		Address:     formatEndpointAddr(*url),
+		EnvBindings: conn.EnvBindings,
+	}, nil
+}
 
+// lookupProviderEndpoint finds a provider component's endpoint in an environment
+// by reading its ReleaseBinding status, returning the matched EndpointURLStatus
+// (with a non-nil ServiceURL) or (nil, reason) when it cannot be resolved.
+// Filters in-memory since the API client may not register the controller's
+// field index. Shared by the resolve and L4-tunnel handlers.
+func lookupProviderEndpoint(
+	ctx context.Context,
+	c client.Client,
+	namespace, project, component, endpoint, environment string,
+) (*openchoreov1alpha1.EndpointURLStatus, string) {
 	var rbList openchoreov1alpha1.ReleaseBindingList
-	if err := h.k8sClient.List(ctx, &rbList, client.InNamespace(namespace)); err != nil {
-		return nil, pending("failed to list ReleaseBindings: " + err.Error())
+	if err := c.List(ctx, &rbList, client.InNamespace(namespace)); err != nil {
+		return nil, "failed to list ReleaseBindings: " + err.Error()
 	}
 
 	var match *openchoreov1alpha1.ReleaseBinding
 	for i := range rbList.Items {
 		rb := &rbList.Items[i]
 		if rb.Spec.Owner.ProjectName == project &&
-			rb.Spec.Owner.ComponentName == conn.Component &&
+			rb.Spec.Owner.ComponentName == component &&
 			rb.Spec.Environment == environment {
 			if match != nil {
-				return nil, pending("multiple ReleaseBindings found for " + project + "/" + conn.Component + " in " + environment)
+				return nil, "multiple ReleaseBindings found for " + project + "/" + component + " in " + environment
 			}
 			match = rb
 		}
 	}
 	if match == nil {
-		return nil, pending("ReleaseBinding not found for " + project + "/" + conn.Component + " in " + environment)
+		return nil, "ReleaseBinding not found for " + project + "/" + component + " in " + environment
 	}
 	if match.Spec.State == openchoreov1alpha1.ReleaseStateUndeploy {
-		return nil, pending("component is undeployed")
+		return nil, "component is undeployed"
 	}
 
-	for _, ep := range match.Status.Endpoints {
-		if ep.Name != conn.Name {
+	for i := range match.Status.Endpoints {
+		ep := &match.Status.Endpoints[i]
+		if ep.Name != endpoint {
 			continue
 		}
 		// WorkloadConnection visibility is project|namespace, both served by the
 		// in-cluster ServiceURL.
 		if ep.ServiceURL == nil {
-			return nil, pending("endpoint \"" + conn.Name + "\" has no in-cluster service URL yet")
+			return nil, "endpoint \"" + endpoint + "\" has no in-cluster service URL yet"
 		}
-		url := ep.ServiceURL
-		return &resolvedDependency{
-			Project:     project,
-			Component:   conn.Component,
-			Endpoint:    conn.Name,
-			Visibility:  conn.Visibility,
-			Type:        string(ep.Type),
-			Scheme:      url.Scheme,
-			Host:        url.Host,
-			Port:        url.Port,
-			Path:        url.Path,
-			Address:     formatEndpointAddr(*url),
-			EnvBindings: conn.EnvBindings,
-		}, nil
+		return ep, ""
 	}
 
-	return nil, pending("endpoint \"" + conn.Name + "\" not yet resolved on provider")
+	return nil, "endpoint \"" + endpoint + "\" not yet resolved on provider"
 }
 
 // formatEndpointAddr mirrors the releasebinding controller's formatEndpointAddress:

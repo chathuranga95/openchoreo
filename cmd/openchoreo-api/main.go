@@ -265,10 +265,17 @@ func main() {
 		resolveDepsHandler := openapihandlers.NewResolveDependenciesHandler(k8sClient, resolveDepsAuthzChecker, logger)
 		authedResolveDepsHandler := jwtMiddleware(resolveDepsHandler)
 
+		// L4 tunnel handler: proxies a raw-TCP WebSocket to the gateway's /api/l4
+		// endpoint after authorizing and resolving the dependency address.
+		l4TunnelAuthzChecker := svcpkg.NewAuthzChecker(runtime.pdp, logger.With("component", "l4-tunnel-authz"))
+		l4TunnelHandler := openapihandlers.NewL4TunnelHandler(k8sClient, gatewayURL, gwTLSConf, l4TunnelAuthzChecker, logger)
+		authedL4TunnelHandler := jwtMiddleware(l4TunnelHandler)
+
 		topMux := http.NewServeMux()
 		topMux.Handle("/exec/", authedExecHandler)
 		topMux.Handle("GET /api/v1/namespaces/{namespace}/environments/{environment}/wirelogs", authedWirelogsHandler)
 		topMux.Handle("POST /api/v1/namespaces/{namespace}/dependencies/resolve", authedResolveDepsHandler)
+		topMux.Handle("/tunnel/", authedL4TunnelHandler)
 		topMux.Handle("/", handler)
 		topHandler = topMux
 		logger.Info("Exec endpoint registered", "path", "/exec/namespaces/{ns}/components/{name}")
@@ -276,6 +283,8 @@ func main() {
 			"path", "/api/v1/namespaces/{namespace}/environments/{environment}/wirelogs")
 		logger.Info("Resolve-dependencies endpoint registered",
 			"path", "/api/v1/namespaces/{namespace}/dependencies/resolve")
+		logger.Info("L4 tunnel endpoint registered",
+			"path", "/tunnel/namespaces/{namespace}/components/{component}")
 	}
 
 	// Create server from configuration
