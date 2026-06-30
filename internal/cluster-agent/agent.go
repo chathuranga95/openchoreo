@@ -49,6 +49,9 @@ type Agent struct {
 	// hubbleStreams tracks active hubble flow streaming sessions indexed by requestID
 	hubbleStreams   map[string]*hubbleSession
 	hubbleStreamsMu sync.Mutex
+	// l4Streams tracks active L4 (raw TCP) tunnel sessions indexed by requestID
+	l4Streams   map[string]*l4Session
+	l4StreamsMu sync.Mutex
 }
 
 func New(cfg *Config, k8sClient client.Client, k8sConfig *rest.Config, logger *slog.Logger) (*Agent, error) {
@@ -103,6 +106,7 @@ func New(cfg *Config, k8sClient client.Client, k8sConfig *rest.Config, logger *s
 		stopChan:      make(chan struct{}),
 		activeStreams: make(map[string]*execSession),
 		hubbleStreams: make(map[string]*hubbleSession),
+		l4Streams:     make(map[string]*l4Session),
 	}, nil
 }
 
@@ -247,6 +251,8 @@ func (a *Agent) handleConnection(ctx context.Context) {
 			switch streamInit.Target {
 			case "hubble":
 				go a.handleHubbleStreamInit(ctx, &streamInit)
+			case "l4":
+				go a.handleL4StreamInit(&streamInit)
 			default:
 				go a.handleHTTPTunnelStreamInit(&streamInit)
 			}
@@ -257,7 +263,7 @@ func (a *Agent) handleConnection(ctx context.Context) {
 		// the close signal for exec/hubble sessions).
 		var streamChunk messaging.HTTPTunnelStreamChunk
 		if err := json.Unmarshal(message, &streamChunk); err == nil && streamChunk.RequestID != "" && (streamChunk.Data != nil || streamChunk.IsClose) {
-			if !a.routeHubbleChunk(&streamChunk) {
+			if !a.routeHubbleChunk(&streamChunk) && !a.routeL4Chunk(&streamChunk) {
 				a.routeStreamChunk(&streamChunk)
 			}
 			continue
