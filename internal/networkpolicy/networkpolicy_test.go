@@ -119,6 +119,15 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchExpressions:
+              - key: openchoreo.dev/system-component
+                operator: Exists
+      ports:
+        - protocol: TCP
+          port: 8080
 `)
 }
 
@@ -164,6 +173,15 @@ spec:
             matchLabels:
               openchoreo.dev/namespace: cp-ns
               openchoreo.dev/environment: development
+      ports:
+        - protocol: TCP
+          port: 9090
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchExpressions:
+              - key: openchoreo.dev/system-component
+                operator: Exists
       ports:
         - protocol: TCP
           port: 9090
@@ -336,6 +354,10 @@ spec:
                 operator: Exists
       ports:
         - protocol: TCP
+          port: 9090
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
           port: 8443
 `)
 }
@@ -370,6 +392,15 @@ spec:
   ingress:
     - from:
         - podSelector: {}
+      ports:
+        - protocol: UDP
+          port: 5353
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchExpressions:
+              - key: openchoreo.dev/system-component
+                operator: Exists
       ports:
         - protocol: UDP
           port: 5353
@@ -446,6 +477,19 @@ spec:
       rules:
         http:
         - {}
+  - fromEndpoints:
+    - matchExpressions:
+      - key: openchoreo.dev/system-component
+        operator: Exists
+      - key: k8s:io.kubernetes.pod.namespace
+        operator: Exists
+    toPorts:
+    - ports:
+      - port: "8080"
+        protocol: TCP
+      rules:
+        http:
+        - {}
 `)
 }
 
@@ -478,6 +522,16 @@ spec:
   ingress:
   - fromEndpoints:
     - {}
+    toPorts:
+    - ports:
+      - port: "5432"
+        protocol: TCP
+  - fromEndpoints:
+    - matchExpressions:
+      - key: openchoreo.dev/system-component
+        operator: Exists
+      - key: k8s:io.kubernetes.pod.namespace
+        operator: Exists
     toPorts:
     - ports:
       - port: "5432"
@@ -515,6 +569,22 @@ spec:
   ingress:
   - fromEndpoints:
     - {}
+    toPorts:
+    - ports:
+      - port: "8080"
+        protocol: TCP
+      rules:
+        http:
+        - {}
+    - ports:
+      - port: "5432"
+        protocol: TCP
+  - fromEndpoints:
+    - matchExpressions:
+      - key: openchoreo.dev/system-component
+        operator: Exists
+      - key: k8s:io.kubernetes.pod.namespace
+        operator: Exists
     toPorts:
     - ports:
       - port: "8080"
@@ -631,6 +701,19 @@ spec:
       matchLabels:
         openchoreo.dev/namespace: cp-ns
         openchoreo.dev/environment: development
+    toPorts:
+    - ports:
+      - port: "9090"
+        protocol: TCP
+      rules:
+        http:
+        - {}
+  - fromEndpoints:
+    - matchExpressions:
+      - key: openchoreo.dev/system-component
+        operator: Exists
+      - key: k8s:io.kubernetes.pod.namespace
+        operator: Exists
     toPorts:
     - ports:
       - port: "9090"

@@ -123,17 +123,13 @@ func makeIngressRules(params ComponentPolicyParams) []any {
 	// We collect additional visibility levels to build extra ingress rules.
 	projectPorts := make([]any, 0, len(entries))
 	var namespacePorts []any
-	var broadAccessPorts []any
 
 	for _, e := range entries {
 		projectPorts = append(projectPorts, e.port)
 
 		for _, vis := range e.visibility {
-			switch vis {
-			case openchoreov1alpha1.EndpointVisibilityNamespace:
+			if vis == openchoreov1alpha1.EndpointVisibilityNamespace {
 				namespacePorts = append(namespacePorts, e.port)
-			case openchoreov1alpha1.EndpointVisibilityInternal, openchoreov1alpha1.EndpointVisibilityExternal:
-				broadAccessPorts = append(broadAccessPorts, e.port)
 			}
 		}
 	}
@@ -169,8 +165,12 @@ func makeIngressRules(params ComponentPolicyParams) []any {
 		})
 	}
 
-	// Rule 3: system components (e.g., gateway) from any namespace (internal or external visibility)
-	if len(broadAccessPorts) > 0 {
+	// Rule 3: platform system components — the gateway (for ingress routing) and
+	// the cluster-agent (for the dev-connect L4 tunnel) — may reach every declared
+	// port from any namespace, regardless of endpoint visibility. The agent runs in
+	// a separate namespace so it is not covered by Rules 1-2; tunnel access control
+	// is enforced at the openchoreo-api layer, not in this policy.
+	if len(projectPorts) > 0 {
 		ingressRules = append(ingressRules, map[string]any{
 			"from": []any{
 				map[string]any{
@@ -185,7 +185,7 @@ func makeIngressRules(params ComponentPolicyParams) []any {
 					},
 				},
 			},
-			"ports": broadAccessPorts,
+			"ports": projectPorts,
 		})
 	}
 
@@ -224,15 +224,12 @@ func makeCiliumComponentPolicies(params ComponentPolicyParams) []map[string]any 
 	})
 
 	projectPorts := make([]ciliumPortEntry, 0, len(entries))
-	var namespacePorts, broadPorts []ciliumPortEntry
+	var namespacePorts []ciliumPortEntry
 	for _, e := range entries {
 		projectPorts = append(projectPorts, e)
 		for _, vis := range e.visibility {
-			switch vis {
-			case openchoreov1alpha1.EndpointVisibilityNamespace:
+			if vis == openchoreov1alpha1.EndpointVisibilityNamespace {
 				namespacePorts = append(namespacePorts, e)
-			case openchoreov1alpha1.EndpointVisibilityInternal, openchoreov1alpha1.EndpointVisibilityExternal:
-				broadPorts = append(broadPorts, e)
 			}
 		}
 	}
@@ -270,8 +267,11 @@ func makeCiliumComponentPolicies(params ComponentPolicyParams) []map[string]any 
 		})
 	}
 
-	// Rule 3: system components (e.g., gateway) from any namespace (internal or external visibility)
-	if len(broadPorts) > 0 {
+	// Rule 3: platform system components — the gateway (for ingress routing) and
+	// the cluster-agent (for the dev-connect L4 tunnel) — may reach every declared
+	// port from any namespace, regardless of endpoint visibility. Tunnel access
+	// control is enforced at the openchoreo-api layer, not in this policy.
+	if len(projectPorts) > 0 {
 		ingressRules = append(ingressRules, map[string]any{
 			"fromEndpoints": []any{
 				map[string]any{"matchExpressions": []any{
@@ -285,7 +285,7 @@ func makeCiliumComponentPolicies(params ComponentPolicyParams) []map[string]any 
 					},
 				}},
 			},
-			"toPorts": ciliumToPorts(broadPorts),
+			"toPorts": ciliumToPorts(projectPorts),
 		})
 	}
 
