@@ -1,0 +1,16 @@
+# Copyright 2026 The OpenChoreo Authors
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: openchoreo.dev/v1alpha1
+kind: Resource
+metadata:
+  name: lightweight-postgres
+  namespace: default
+spec:
+  owner:
+    projectName: default
+  type:
+    kind: ClusterResourceType
+    name: postgres
+  parameters:
+    database: lightweightdb

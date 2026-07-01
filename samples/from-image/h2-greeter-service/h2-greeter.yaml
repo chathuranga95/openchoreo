@@ -1,0 +1,39 @@
+apiVersion: openchoreo.dev/v1alpha1
+kind: Component
+metadata:
+  name: h2-greeter
+  namespace: default
+spec:
+  owner:
+    projectName: default
+
+  autoDeploy: true
+  componentType:
+    kind: ClusterComponentType
+    name: deployment/service
+
+---
+
+apiVersion: openchoreo.dev/v1alpha1
+kind: Workload
+metadata:
+  name: h2-greeter
+  namespace: default
+spec:
+  owner:
+    componentName: h2-greeter
+    projectName: default
+  endpoints:
+    grpc:
+      type: TCP
+      port: 9090
+      visibility: [external]
+  dependencies:
+    endpoints:
+      - component: greeter-service
+        name: http
+        visibility: project
+        envBindings:
+          address: GREETER_SERVICE_URL
+  container:
+    image: "ghcr.io/openchoreo/samples/hello-world-grpc:latest"

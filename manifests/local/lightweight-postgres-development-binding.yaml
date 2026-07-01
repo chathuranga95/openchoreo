@@ -1,0 +1,18 @@
+# Copyright 2026 The OpenChoreo Authors
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: openchoreo.dev/v1alpha1
+kind: ResourceReleaseBinding
+metadata:
+  name: lightweight-postgres-development
+  namespace: default
+spec:
+  owner:
+    projectName: default
+    resourceName: lightweight-postgres
+  resourceRelease: lightweight-postgres-bd59b5556
+  environment: development
+  retainPolicy: Delete
+  resourceTypeEnvironmentConfigs:
+    memory: 256Mi
+    adminEnabled: true
