@@ -28,6 +28,24 @@ spec:
       port: 8080
       visibility: [project]
   dependencies:
+    endpoints:
+      # greeter-service lives in project "default" (this component is in project "doclet"),
+      # so it is consumed cross-project via "namespace" visibility. Its "http" endpoint
+      # resolves to the in-cluster serviceURL, tunnelled by `occ dev connect`.
+      - project: default
+        component: greeter-service
+        name: http
+        visibility: namespace
+        envBindings:
+          address: GREETER_SERVICE_URL
+      # h2-greeter also lives in project "default"; its "grpc" endpoint is a TCP endpoint,
+      # so the address binding is rendered as host:port (no scheme).
+      - project: default
+        component: h2-greeter
+        name: grpc
+        visibility: namespace
+        envBindings:
+          address: H2_GREETER_URL
     resources:
       - ref: doclet-postgres
         envBindings:
