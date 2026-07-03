@@ -217,6 +217,21 @@ func main() {
 		baseMux.Handle("/mcp", mcpHandler)
 	}
 
+	// Dev-connect resolve endpoint (only if enabled). Plain JSON handler registered on
+	// the baseMux like /mcp — authenticated by the JWT middleware, with authorization
+	// (component:connect) enforced inside the handler. Not part of the strict OpenAPI
+	// chain, and independent of the cluster gateway.
+	if cfg.DevConnect.Enabled {
+		devConnectAuthzChecker := svcpkg.NewAuthzChecker(runtime.pdp, logger.With("component", "dev-connect-authz"))
+		devConnectHandler, err := openapihandlers.NewDevConnectHandler(k8sClient, devConnectAuthzChecker, cfg.DevConnect, logger)
+		if err != nil {
+			logger.Error("Failed to initialize dev-connect handler", slog.Any("error", err))
+			os.Exit(1)
+		}
+		baseMux.Handle("POST /api/v1/dev/connect:resolve", jwtMiddleware(devConnectHandler))
+		logger.Info("Dev-connect resolve endpoint registered", "path", "/api/v1/dev/connect:resolve")
+	}
+
 	// Create OpenAPI handler with middleware chain (order: logger → auth → webhookBody → handler)
 	// Middlewares are applied last-to-first (last entry becomes the outermost wrapper).
 	// Execution order: loggerMiddleware → authMiddleware → webhookRawBodyMiddleware → handler.

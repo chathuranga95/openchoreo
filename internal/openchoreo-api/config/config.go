@@ -27,6 +27,8 @@ type Config struct {
 	Logging LoggingConfig `koanf:"logging"`
 	// ClusterGateway defines cluster gateway connection settings.
 	ClusterGateway ClusterGatewayConfig `koanf:"cluster_gateway"`
+	// DevConnect defines the `occ dev connect` resolve endpoint settings.
+	DevConnect DevConnectConfig `koanf:"dev_connect"`
 }
 
 // Defaults returns the default configuration.
@@ -39,6 +41,7 @@ func Defaults() Config {
 		SecretManagement: SecretManagementDefaults(),
 		Logging:          LoggingDefaults(),
 		ClusterGateway:   ClusterGatewayDefaults(),
+		DevConnect:       DevConnectDefaults(),
 	}
 }
 
@@ -84,6 +87,7 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.MCP.ValidateMCPConfig(coreconfig.NewPath("mcp"))...)
 	errs = append(errs, c.Logging.Validate(coreconfig.NewPath("logging"))...)
 	errs = append(errs, c.ClusterGateway.Validate(coreconfig.NewPath("cluster_gateway"))...)
+	errs = append(errs, c.DevConnect.Validate(coreconfig.NewPath("dev_connect"))...)
 
 	return errs.OrNil()
 }
