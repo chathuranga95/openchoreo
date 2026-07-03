@@ -24,6 +24,7 @@ import (
 	"github.com/openchoreo/openchoreo/internal/occ/cmd/config"
 	"github.com/openchoreo/openchoreo/internal/occ/cmd/dataplane"
 	"github.com/openchoreo/openchoreo/internal/occ/cmd/deploymentpipeline"
+	"github.com/openchoreo/openchoreo/internal/occ/cmd/dev"
 	"github.com/openchoreo/openchoreo/internal/occ/cmd/environment"
 	"github.com/openchoreo/openchoreo/internal/occ/cmd/login"
 	"github.com/openchoreo/openchoreo/internal/occ/cmd/logout"
@@ -98,6 +99,7 @@ func BuildRootCmd() *cobra.Command {
 		workload.NewWorkloadCmd(f),
 		deploymentpipeline.NewDeploymentPipelineCmd(f),
 		observabilityalertsnotificationchannel.NewObservabilityAlertsNotificationChannelCmd(f),
+		dev.NewDevCmd(),
 	)
 
 	return rootCmd
