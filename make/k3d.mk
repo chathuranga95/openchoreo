@@ -12,7 +12,7 @@ K3D_WP_NAMESPACE := openchoreo-workflow-plane
 K3D_OP_NAMESPACE := openchoreo-observability-plane
 
 # Components that can be built locally
-K3D_BUILD_COMPONENTS := controller openchoreo-api observer cluster-gateway cluster-agent
+K3D_BUILD_COMPONENTS := controller openchoreo-api observer cluster-gateway cluster-agent dev-agent
 
 # Helper functions
 define k3d_check_cluster
@@ -54,6 +54,10 @@ k3d.build.cluster-gateway: ## Build cluster-gateway image
 .PHONY: k3d.build.cluster-agent
 k3d.build.cluster-agent: ## Build cluster-agent image
 	@$(MAKE) docker.build.cluster-agent TAG=$(OPENCHOREO_IMAGE_TAG)
+
+.PHONY: k3d.build.dev-agent
+k3d.build.dev-agent: ## Build dev-agent image
+	@$(MAKE) docker.build.dev-agent TAG=$(OPENCHOREO_IMAGE_TAG)
 
 # Image Loading
 .PHONY: k3d.load
@@ -103,6 +107,13 @@ k3d.load.cluster-agent: ## Import cluster-agent image into k3d
 	@$(call log_info, Loading cluster-agent image...)
 	@k3d image import $(IMAGE_REPO_PREFIX)/cluster-agent:$(OPENCHOREO_IMAGE_TAG) --cluster $(K3D_CLUSTER_NAME)
 	@$(call log_success, Cluster-agent image loaded!)
+
+.PHONY: k3d.load.dev-agent
+k3d.load.dev-agent: ## Import dev-agent image into k3d
+	$(call k3d_check_cluster)
+	@$(call log_info, Loading dev-agent image...)
+	@k3d image import $(IMAGE_REPO_PREFIX)/dev-agent:$(OPENCHOREO_IMAGE_TAG) --cluster $(K3D_CLUSTER_NAME)
+	@$(call log_success, Dev-agent image loaded!)
 
 # Uninstall Targets
 .PHONY: k3d.uninstall
@@ -213,6 +224,15 @@ k3d.update.cluster-agent: ## Update cluster-agent: build, load, restart across a
 		fi; \
 	done
 	@$(call log_success, Cluster-agent updated across all planes!)
+
+.PHONY: k3d.update.dev-agent
+k3d.update.dev-agent: ## Update dev-agent: build, load, restart (data plane)
+	@$(call log_info, Updating dev-agent...)
+	@$(MAKE) k3d.build.dev-agent
+	@$(MAKE) k3d.load.dev-agent
+	@kubectl rollout restart deployment/dev-agent -n $(K3D_DP_NAMESPACE) --context k3d-$(K3D_CLUSTER_NAME) || true
+	@kubectl rollout status deployment/dev-agent -n $(K3D_DP_NAMESPACE) --context k3d-$(K3D_CLUSTER_NAME) --timeout=300s || true
+	@$(call log_success, Dev-agent updated!)
 
 # Helper Targets
 .PHONY: k3d.status
