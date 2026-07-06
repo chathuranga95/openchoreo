@@ -47,7 +47,7 @@ spec:
         envBindings:
           address: H2_GREETER_URL
     resources:
-      - ref: doclet-postgres
+      - ref: external-postgres
         envBindings:
           host: DB_HOST
           port: DB_PORT
