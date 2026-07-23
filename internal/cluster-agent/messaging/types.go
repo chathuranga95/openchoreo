@@ -96,6 +96,10 @@ type HTTPTunnelStreamInit struct {
 	Headers      map[string][]string `json:"headers,omitempty"`
 	IsUpgrade    bool                `json:"isUpgrade"`              // True for SPDY/WebSocket upgrades
 	UpgradeProto string              `json:"upgradeProto,omitempty"` // "SPDY/3.1", "websocket", etc.
+
+	// DialAddr is the "host:port" the agent should net.Dial, used only when
+	// Target == "tcp" (the dep-connect raw TCP tunnel; see internal/cluster-agent/depconnect.go).
+	DialAddr string `json:"dialAddr,omitempty"`
 }
 
 type HTTPTunnelStreamChunk struct {

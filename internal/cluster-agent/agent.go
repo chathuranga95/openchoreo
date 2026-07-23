@@ -49,6 +49,9 @@ type Agent struct {
 	// hubbleStreams tracks active hubble flow streaming sessions indexed by requestID
 	hubbleStreams   map[string]*hubbleSession
 	hubbleStreamsMu sync.Mutex
+	// dialStreams tracks active dep-connect TCP dial sessions indexed by requestID
+	dialStreams   map[string]*dialSession
+	dialStreamsMu sync.Mutex
 }
 
 func New(cfg *Config, k8sClient client.Client, k8sConfig *rest.Config, logger *slog.Logger) (*Agent, error) {
@@ -103,6 +106,7 @@ func New(cfg *Config, k8sClient client.Client, k8sConfig *rest.Config, logger *s
 		stopChan:      make(chan struct{}),
 		activeStreams: make(map[string]*execSession),
 		hubbleStreams: make(map[string]*hubbleSession),
+		dialStreams:   make(map[string]*dialSession),
 	}, nil
 }
 
@@ -247,6 +251,8 @@ func (a *Agent) handleConnection(ctx context.Context) {
 			switch streamInit.Target {
 			case "hubble":
 				go a.handleHubbleStreamInit(ctx, &streamInit)
+			case "tcp":
+				go a.handleDialStreamInit(ctx, &streamInit)
 			default:
 				go a.handleHTTPTunnelStreamInit(&streamInit)
 			}
@@ -254,10 +260,10 @@ func (a *Agent) handleConnection(ctx context.Context) {
 		}
 
 		// Try to parse as stream chunk (stdin data for active exec sessions, or
-		// the close signal for exec/hubble sessions).
+		// the close signal for exec/hubble/dial sessions).
 		var streamChunk messaging.HTTPTunnelStreamChunk
 		if err := json.Unmarshal(message, &streamChunk); err == nil && streamChunk.RequestID != "" && (streamChunk.Data != nil || streamChunk.IsClose) {
-			if !a.routeHubbleChunk(&streamChunk) {
+			if !a.routeHubbleChunk(&streamChunk) && !a.routeDialChunk(&streamChunk) {
 				a.routeStreamChunk(&streamChunk)
 			}
 			continue

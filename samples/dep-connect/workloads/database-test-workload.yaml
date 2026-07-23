@@ -1,0 +1,40 @@
+apiVersion: openchoreo.dev/v1alpha1
+kind: Component
+metadata:
+  name: database-test
+  namespace: default
+spec:
+  owner:
+    projectName: default
+
+  componentType:
+    kind: ClusterComponentType
+    name: deployment/service
+  autoDeploy: true
+
+---
+apiVersion: openchoreo.dev/v1alpha1
+kind: Workload
+metadata:
+  name: database-test
+  namespace: default
+spec:
+  owner:
+    componentName: database-test
+    projectName: default
+  endpoints:
+    db-http:
+      type: HTTP
+      port: 4000
+      visibility: [project]
+  dependencies:
+    resources:
+      - ref: external-postgres
+        envBindings:
+          host: DB_HOST
+          port: DB_PORT
+          username: DB_USER
+          password: DB_PASSWORD
+          database: DB_NAME
+  container:
+    image: ghcr.io/openchoreo/samples/database-test:latest

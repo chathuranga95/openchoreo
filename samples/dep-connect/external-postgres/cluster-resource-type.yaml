@@ -1,0 +1,70 @@
+apiVersion: openchoreo.dev/v1alpha1
+kind: ClusterResourceType
+metadata:
+  name: external-postgres
+  annotations:
+    openchoreo.dev/description: >-
+      A pre-existing PostgreSQL server reachable from the data plane's network
+      (e.g. a container on the same docker network, a VM, or a managed
+      database). Wraps a literal connection endpoint -- provisions nothing on
+      the data plane beyond a marker ConfigMap.
+
+      All outputs, INCLUDING password, are plain value-kind (not secret-kind):
+      this is intentional so `occ local` can fully resolve the
+      connection today (v1 doesn't resolve secret-kind outputs yet -- see
+      worklog.md D3/D12). Do not use this ResourceType for anything but
+      throwaway local test databases.
+spec:
+  parameters:
+    openAPIV3Schema:
+      type: object
+      required: [host, port, database, username, password]
+      properties:
+        host:
+          type: string
+          description: Hostname or IP of the Postgres server, reachable from the data plane's network.
+        port:
+          type: string
+          default: "5432"
+        database:
+          type: string
+        username:
+          type: string
+        password:
+          type: string
+          description: Plain-text password, surfaced as a non-secret output (see the type-level description).
+
+  retainPolicy: Delete
+
+  outputs:
+    - name: host
+      value: "${parameters.host}"
+    - name: port
+      value: "${parameters.port}"
+    - name: database
+      value: "${parameters.database}"
+    - name: username
+      value: "${parameters.username}"
+    - name: password
+      value: "${parameters.password}"
+    - name: url
+      value: "postgresql://${parameters.username}:${parameters.password}@${parameters.host}:${parameters.port}/${parameters.database}"
+
+  resources:
+    # ResourceType requires at least one provisioned manifest; this ConfigMap
+    # is a no-op marker (mirrors the connection params for observability) so
+    # the type has something to apply. A bare ConfigMap has no rollout status,
+    # so it's considered Healthy/Ready as soon as it's applied.
+    - id: config
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${metadata.name}-config
+          namespace: ${metadata.namespace}
+          labels: ${metadata.labels}
+        data:
+          host: ${parameters.host}
+          port: ${parameters.port}
+          database: ${parameters.database}
+          username: ${parameters.username}

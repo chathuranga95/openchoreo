@@ -1,0 +1,14 @@
+# ResourceReleaseBinding for external-postgres in the `development` env.
+# spec.resourceRelease is intentionally omitted -- the binding stays pending
+# until promoted to a specific ResourceRelease. See the README's "Promote".
+apiVersion: openchoreo.dev/v1alpha1
+kind: ResourceReleaseBinding
+metadata:
+  name: external-postgres-development
+  namespace: default
+spec:
+  owner:
+    projectName: default
+    resourceName: external-postgres
+  environment: development
+  retainPolicy: Delete

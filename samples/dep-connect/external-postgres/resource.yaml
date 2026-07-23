@@ -1,0 +1,17 @@
+apiVersion: openchoreo.dev/v1alpha1
+kind: Resource
+metadata:
+  name: external-postgres
+  namespace: default
+spec:
+  owner:
+    projectName: default
+  type:
+    kind: ClusterResourceType
+    name: external-postgres
+  parameters:
+    host: 172.18.0.4
+    port: "5432"
+    database: postgres
+    username: postgres
+    password: postgres

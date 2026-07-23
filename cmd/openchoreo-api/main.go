@@ -217,6 +217,24 @@ func main() {
 		baseMux.Handle("/mcp", mcpHandler)
 	}
 
+	// Dep-connect resolve endpoint (only if enabled). Plain JSON handler registered on
+	// the baseMux like /mcp — authenticated by the JWT middleware, with authorization
+	// (component:connect) enforced inside the handler. Not part of the strict OpenAPI
+	// chain. The stream endpoint that consumes its capability is registered further
+	// down, alongside exec/wirelogs, once the cluster gateway is known to be available.
+	var depConnectHandler *openapihandlers.DepConnectHandler
+	if cfg.DepConnect.Enabled {
+		depConnectAuthzChecker := svcpkg.NewAuthzChecker(runtime.pdp, logger.With("component", "dep-connect-authz"))
+		var err error
+		depConnectHandler, err = openapihandlers.NewDepConnectHandler(k8sClient, depConnectAuthzChecker, cfg.DepConnect, logger)
+		if err != nil {
+			logger.Error("Failed to initialize dep-connect handler", slog.Any("error", err))
+			os.Exit(1)
+		}
+		baseMux.Handle("POST /api/v1/depconnect:resolve", jwtMiddleware(depConnectHandler))
+		logger.Info("Dep-connect resolve endpoint registered", "path", "/api/v1/depconnect:resolve")
+	}
+
 	// Create OpenAPI handler with middleware chain (order: logger → auth → webhookBody → handler)
 	// Middlewares are applied last-to-first (last entry becomes the outermost wrapper).
 	// Execution order: loggerMiddleware → authMiddleware → webhookRawBodyMiddleware → handler.
@@ -261,6 +279,18 @@ func main() {
 		topMux := http.NewServeMux()
 		topMux.Handle("/exec/", authedExecHandler)
 		topMux.Handle("GET /api/v1/namespaces/{namespace}/environments/{environment}/wirelogs", authedWirelogsHandler)
+
+		// Dep-connect stream endpoint: one raw TCP tunnel per accepted local
+		// connection, relayed through this same gateway (worklog §8). Requires both
+		// the resolve handler (to mint capabilities) and the gateway (to relay).
+		if depConnectHandler != nil {
+			depConnectStreamHandler := openapihandlers.NewDepConnectStreamHandler(
+				gatewayURL, gwTLSConf, depConnectHandler.VerifyKey(), logger,
+			)
+			topMux.Handle("/depconnect/", jwtMiddleware(depConnectStreamHandler))
+			logger.Info("Dep-connect stream endpoint registered", "path", "/depconnect/namespaces/{ns}/components/{name}")
+		}
+
 		topMux.Handle("/", handler)
 		topHandler = topMux
 		logger.Info("Exec endpoint registered", "path", "/exec/namespaces/{ns}/components/{name}")
