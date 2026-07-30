@@ -1,0 +1,82 @@
+# Copyright 2026 The OpenChoreo Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Reusable failure notifier: posts a Block Kit alert to a Slack channel when a
+# CI workflow leg fails. Called (with `if: failure()`) by the e2e gate and the
+# standalone Quick Start smoke test so a single payload format is maintained in
+# one place.
+#
+# Destination is an Incoming Webhook bound to the target channel server-side, so
+# the channel is not named here — it lives in the Slack app config. The webhook
+# URL is the `SLACK_WEBHOOK_URL` secret, passed explicitly by the caller. When
+# the secret is absent the post is skipped gracefully (no failed job), so the
+# alert degrades to a no-op until the webhook is provisioned.
+
+name: Slack Failure Notification
+
+on:
+  workflow_call:
+    inputs:
+      suite:
+        description: "Short label for the failing suite, used in the alert headline (e.g. 'E2E Gate')"
+        required: false
+        type: string
+        default: "CI"
+    secrets:
+      SLACK_WEBHOOK_URL:
+        description: "Slack Incoming Webhook URL bound to the alert channel"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    name: Post Slack alert
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check Slack webhook is configured
+        id: guard
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ -n "${SLACK_WEBHOOK_URL}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::SLACK_WEBHOOK_URL is not set; skipping Slack failure notification."
+          fi
+
+      - name: Post failure alert to Slack
+        if: steps.guard.outputs.enabled == 'true'
+        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            text: ":red_circle: ${{ inputs.suite }} failed on ${{ github.ref_name }} (${{ github.workflow }})"
+            blocks:
+              - type: header
+                text:
+                  type: plain_text
+                  text: ":red_circle: ${{ inputs.suite }} failed"
+                  emoji: true
+              - type: section
+                fields:
+                  - type: mrkdwn
+                    text: "*Workflow:*\n${{ github.workflow }}"
+                  - type: mrkdwn
+                    text: "*Branch / ref:*\n`${{ github.ref_name }}`"
+                  - type: mrkdwn
+                    text: "*Trigger:*\n${{ github.event_name }}"
+                  - type: mrkdwn
+                    text: "*Commit:*\n<${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|`${{ github.sha }}`>"
+              - type: actions
+                elements:
+                  - type: button
+                    text:
+                      type: plain_text
+                      text: "View failed run"
+                      emoji: true
+                    url: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    style: danger

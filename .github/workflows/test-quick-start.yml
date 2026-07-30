@@ -159,3 +159,19 @@ jobs:
       - name: Tear down quick-start container
         if: always()
         run: docker rm -f "${QS_CONTAINER}" 2>/dev/null || true
+
+  # Alert on standalone failures (manual dispatch). PR runs are excluded as
+  # noise; gate-invoked runs (helm_chart_version set) are excluded because the
+  # e2e gate's own notify job already covers them — no double alert. The nightly
+  # quick-start run now arrives via that gate, so it alerts there, not here.
+  notify:
+    name: Notify on failure
+    needs: [quick-start]
+    if: ${{ failure() && github.event_name != 'pull_request' && inputs.helm_chart_version == '' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/slack-notify-failure.yml
+    with:
+      suite: Quick Start Smoke Test
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
