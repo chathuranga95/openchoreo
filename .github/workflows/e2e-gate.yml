@@ -736,6 +736,6 @@ jobs:
       contents: read
     uses: ./.github/workflows/slack-notify-failure.yml
     with:
-      suite: E2E Gate
+      suite: End-to-End Tests
     secrets:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
