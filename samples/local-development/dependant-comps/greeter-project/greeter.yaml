@@ -29,6 +29,19 @@ spec:
   environment: development
 ---
 apiVersion: openchoreo.dev/v1alpha1
+kind: ProjectReleaseBinding
+metadata:
+  name: greeter-staging
+  namespace: default
+  labels:
+    openchoreo.dev/project: greeter
+    openchoreo.dev/environment: staging
+spec:
+  owner:
+    projectName: greeter
+  environment: staging
+---
+apiVersion: openchoreo.dev/v1alpha1
 kind: Component
 metadata:
   name: greeter-service

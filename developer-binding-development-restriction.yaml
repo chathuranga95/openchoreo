@@ -1,0 +1,30 @@
+# The authorization context uses namespace-qualified environment names.
+# This restricts only the listed actions; every other action in the developer
+# role remains unconditionally allowed by this mapping.
+apiVersion: openchoreo.dev/v1alpha1
+kind: ClusterAuthzRoleBinding
+metadata:
+  name: developer-binding
+  labels:
+    app.kubernetes.io/instance: openchoreo-control-plane
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: openchoreo-control-plane
+    app.kubernetes.io/part-of: openchoreo
+    app.kubernetes.io/version: latest-dev
+    helm.sh/chart: openchoreo-control-plane-0.0.0-latest-dev
+    openchoreo.io/bootstrap: "true"
+spec:
+  effect: allow
+  entitlement:
+    claim: groups
+    value: developers
+  roleMappings:
+    - roleRef:
+        kind: ClusterAuthzRole
+        name: developer
+      conditions:
+        - actions:
+            - component:connect
+            - resource:connect
+            - resource:read-secrets
+          expression: resource.environment == "default/development"
