@@ -4,6 +4,7 @@
     <img 
     src="./docs/images/openchoreo-horizontal-color.png" alt="OpenChoreo Platform Abstractions" 
     width="600"/>
+    <img referrerpolicy="no-referrer-when-downgrade" src="https://static.openchoreo.dev/a.png?x-pxid=31e65b03-c7dc-4794-9ae5-0099d878571d" />
   </p>
   <h1 style="font-size: 1.5em;">
     A complete, open-source developer platform for Kubernetes
