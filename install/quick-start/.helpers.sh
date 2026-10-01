@@ -471,6 +471,11 @@ install_helm_chart() {
         helm_args+=("--version" "$OPENCHOREO_CHART_VERSION")
     fi
 
+    # Optional registry override for first-party images (e.g. ghcr.io to bypass the analytics gateway)
+    if [[ -n "${OPENCHOREO_IMAGE_REGISTRY:-}" && "$is_third_party" != "true" ]]; then
+        helm_args+=("--set-string" "global.imageRegistry=$OPENCHOREO_IMAGE_REGISTRY")
+    fi
+
     helm_args+=("${additional_args[@]}")
 
     # If monitor flag is requested, run helm in background and monitor pods in real-time
@@ -1108,7 +1113,7 @@ install_observability_plane() {
 
     # Install logs and metrics observability modules
     # See https://github.com/openchoreo/community-modules for more details
-    local modules_repo="oci://ghcr.io/openchoreo/helm-charts"
+    local modules_repo="$MODULES_HELM_REPO"
 
     log_info "Installing observability modules..."
 
