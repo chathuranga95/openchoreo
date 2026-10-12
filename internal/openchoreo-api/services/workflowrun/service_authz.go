@@ -214,7 +214,7 @@ func (s *workflowRunServiceWithAuthz) GetWorkflowRunStatus(ctx context.Context, 
 	return s.internal.GetWorkflowRunStatus(ctx, namespaceName, runName)
 }
 
-func (s *workflowRunServiceWithAuthz) TriggerWorkflow(ctx context.Context, namespaceName, projectName, componentName, commit string) (*models.WorkflowRunTriggerResponse, error) {
+func (s *workflowRunServiceWithAuthz) TriggerWorkflow(ctx context.Context, namespaceName, projectName, componentName, commit, releaseLine string) (*models.WorkflowRunTriggerResponse, error) {
 	// Resolve the component's workflow reference for the authz check
 	var workflowAttr string
 	var comp openchoreov1alpha1.Component
@@ -245,5 +245,5 @@ func (s *workflowRunServiceWithAuthz) TriggerWorkflow(ctx context.Context, names
 	}); err != nil {
 		return nil, err
 	}
-	return s.internal.TriggerWorkflow(ctx, namespaceName, projectName, componentName, commit)
+	return s.internal.TriggerWorkflow(ctx, namespaceName, projectName, componentName, commit, releaseLine)
 }

@@ -1268,6 +1268,7 @@ openchoreoApi:
               system: true
               actions:
                 - "component:view"
+                - "releaseline:view"
                 - "componenttype:view"
                 - "resource:view"
                 - "resourcerelease:view"
@@ -1312,6 +1313,7 @@ openchoreoApi:
               system: true
               actions:
                 - "component:view"
+                - "releaseline:view"
                 - "project:view"
                 - "namespace:view"
                 - "componentrelease:view"
@@ -1416,6 +1418,10 @@ openchoreoApi:
                 - "component:delete"
                 - "component:exec"
                 - "component:connect"
+                - "releaseline:view"
+                - "releaseline:create"
+                - "releaseline:update"
+                - "releaseline:delete"
                 - "componentrelease:view"
                 - "componentrelease:create"
                 - "releasebinding:view"
@@ -1487,6 +1493,7 @@ openchoreoApi:
                 - "workflow:view"
                 - "project:view"
                 - "component:view"
+                - "releaseline:view"
                 - "componentrelease:view"
                 - "componentrelease:create"
                 - "releasebinding:view"
@@ -1537,6 +1544,10 @@ openchoreoApi:
                 - "component:delete"
                 - "component:exec"
                 - "component:connect"
+                - "releaseline:view"
+                - "releaseline:create"
+                - "releaseline:update"
+                - "releaseline:delete"
                 - "componentrelease:view"
                 - "componentrelease:create"
                 - "releasebinding:view"
