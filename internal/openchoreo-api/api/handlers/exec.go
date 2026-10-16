@@ -85,7 +85,7 @@ func (h *ExecHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// there's no RESTResourceParam to seed resource.namespace/name
 	// pre-handler — this call is the only source, on both the success and
 	// the denied path.
-	audit.SetResource(ctx, &audit.Resource{Namespace: namespace, Name: componentName})
+	audit.SetResource(ctx, &audit.Resource{Namespace: namespace, Name: componentName, Metadata: releaseLineAuditMetadata(releaseLine)})
 
 	// Authorize: check that the caller has component:exec permission for this environment.
 	if h.authzChecker == nil {

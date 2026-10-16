@@ -198,3 +198,12 @@ func (h *Handler) DeleteComponentReleaseLine(
 	}
 	return gen.DeleteComponentReleaseLine204Response{}, nil
 }
+
+// releaseLineAuditMetadata returns audit resource metadata recording the release line an
+// operation acts on, or nil when it acts on no line.
+func releaseLineAuditMetadata(releaseLine string) map[string]any {
+	if releaseLine == "" {
+		return nil
+	}
+	return map[string]any{"releaseLine": releaseLine}
+}

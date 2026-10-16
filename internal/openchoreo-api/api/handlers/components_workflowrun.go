@@ -57,7 +57,12 @@ func (h *Handler) CreateComponentWorkflowRun(
 		return gen.CreateComponentWorkflowRun500JSONResponse{InternalErrorJSONResponse: internalError()}, nil
 	}
 
-	audit.SetResource(ctx, &audit.Resource{Namespace: request.NamespaceName, UID: string(wfRun.UID), Name: wfRun.Name})
+	audit.SetResource(ctx, &audit.Resource{
+		Namespace: request.NamespaceName,
+		UID:       string(wfRun.UID),
+		Name:      wfRun.Name,
+		Metadata:  releaseLineAuditMetadata(releaseLine),
+	})
 
 	genWfRun, err := convert[openchoreov1alpha1.WorkflowRun, gen.WorkflowRun](*wfRun)
 	if err != nil {
